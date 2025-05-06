@@ -1,0 +1,29 @@
+[
+  {
+    "Name": "King Tower",
+    "Type": "KING",
+    "BaseHP": 2000,
+    "BaseATK": 500,
+    "BaseDEF": 300,
+    "CritChancePercent": 10,
+    "DestroyEXP": 200
+  },
+  {
+    "Name": "Guard Tower 1",
+    "Type": "GUARD1",
+    "BaseHP": 1000,
+    "BaseATK": 300,
+    "BaseDEF": 200,
+    "CritChancePercent": 5,
+    "DestroyEXP": 100
+  },
+  {
+    "Name": "Guard Tower 2",
+    "Type": "GUARD2",
+    "BaseHP": 1000,
+    "BaseATK": 300,
+    "BaseDEF": 200,
+    "CritChancePercent": 5,
+    "DestroyEXP": 100
+  }
+]

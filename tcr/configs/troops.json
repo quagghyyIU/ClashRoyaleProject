@@ -1,0 +1,52 @@
+[
+  {
+    "Name": "Pawn",
+    "BaseHP": 50,
+    "BaseATK": 150,
+    "BaseDEF": 100,
+    "ManaCost": 2,
+    "DestroyEXP": 5,
+    "SpecialAbility": "",
+    "IsSpecialOnly": false
+  },
+  {
+    "Name": "Knight",
+    "BaseHP": 200,
+    "BaseATK": 300,
+    "BaseDEF": 150,
+    "ManaCost": 3,
+    "DestroyEXP": 10,
+    "SpecialAbility": "",
+    "IsSpecialOnly": false
+  },
+  {
+    "Name": "Bishop",
+    "BaseHP": 150,
+    "BaseATK": 250,
+    "BaseDEF": 100,
+    "ManaCost": 3,
+    "DestroyEXP": 10,
+    "SpecialAbility": "",
+    "IsSpecialOnly": false
+  },
+  {
+    "Name": "Rook",
+    "BaseHP": 250,
+    "BaseATK": 200,
+    "BaseDEF": 200,
+    "ManaCost": 3,
+    "DestroyEXP": 15,
+    "SpecialAbility": "",
+    "IsSpecialOnly": false
+  },
+  {
+    "Name": "Queen",
+    "BaseHP": 0,
+    "BaseATK": 0,
+    "BaseDEF": 0,
+    "ManaCost": 5,
+    "DestroyEXP": 30,
+    "SpecialAbility": "HEAL_LOWEST_HP_TOWER_300",
+    "IsSpecialOnly": true
+  }
+]
