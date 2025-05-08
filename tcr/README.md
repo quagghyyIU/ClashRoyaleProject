@@ -21,6 +21,7 @@ The game features various troops with different stats and abilities:
 - **Knight**: Balanced unit with moderate HP and attack
 - **Bishop**: Strategic unit with good attack
 - **Rook**: Defensive unit with high HP
+- **Prince**: Powerful unit with high HP, attack, and defense
 - **Queen**: Special unit that heals the friendly tower with the lowest HP
 
 ## Configuration
