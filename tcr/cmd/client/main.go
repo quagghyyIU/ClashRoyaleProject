@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
 )
 
 func main() {
-	fmt.Println("Text-Based Clash Royale (TCR) - Client")
-	fmt.Println("=======================================")
-	fmt.Println("Client initialized - Phase 0")
-
-	// This is a placeholder for the client implementation in future phases
-	log.Println("Client application initialized in Phase 0")
+	fmt.Println("TCR Client - Phase 1")
+	fmt.Println("=====================")
+	fmt.Println("For Phase 1, the game logic is being tested directly in the server.")
+	fmt.Println("Please run the server executable to test the Simple TCR game logic.")
+	fmt.Println("\nThe client-server networking implementation will be added in later phases.")
 }
