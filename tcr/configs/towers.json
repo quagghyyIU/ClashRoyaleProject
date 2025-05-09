@@ -13,7 +13,7 @@
     "Type": "GUARD1",
     "BaseHP": 1000,
     "BaseATK": 300,
-    "BaseDEF": 200,
+    "BaseDEF": 100,
     "CritChancePercent": 5,
     "DestroyEXP": 100
   },
@@ -22,7 +22,7 @@
     "Type": "GUARD2",
     "BaseHP": 1000,
     "BaseATK": 300,
-    "BaseDEF": 200,
+    "BaseDEF": 100,
     "CritChancePercent": 5,
     "DestroyEXP": 100
   }

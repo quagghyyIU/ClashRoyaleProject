@@ -4,7 +4,7 @@
     "BaseHP": 50,
     "BaseATK": 150,
     "BaseDEF": 100,
-    "ManaCost": 2,
+    "ManaCost": 3,
     "DestroyEXP": 5,
     "SpecialAbility": "",
     "IsSpecialOnly": false
@@ -14,17 +14,17 @@
     "BaseHP": 200,
     "BaseATK": 300,
     "BaseDEF": 150,
-    "ManaCost": 3,
-    "DestroyEXP": 10,
+    "ManaCost": 5,
+    "DestroyEXP": 25,
     "SpecialAbility": "",
     "IsSpecialOnly": false
   },
   {
     "Name": "Bishop",
-    "BaseHP": 150,
-    "BaseATK": 250,
-    "BaseDEF": 100,
-    "ManaCost": 3,
+    "BaseHP": 100,
+    "BaseATK": 200,
+    "BaseDEF": 150,
+    "ManaCost": 4,
     "DestroyEXP": 10,
     "SpecialAbility": "",
     "IsSpecialOnly": false
@@ -34,8 +34,18 @@
     "BaseHP": 250,
     "BaseATK": 200,
     "BaseDEF": 200,
-    "ManaCost": 3,
-    "DestroyEXP": 15,
+    "ManaCost": 5,
+    "DestroyEXP": 25,
+    "SpecialAbility": "",
+    "IsSpecialOnly": false
+  },
+  {
+    "Name": "Prince",
+    "BaseHP": 500,
+    "BaseATK": 400,
+    "BaseDEF": 300,
+    "ManaCost": 6,
+    "DestroyEXP": 50,
     "SpecialAbility": "",
     "IsSpecialOnly": false
   },

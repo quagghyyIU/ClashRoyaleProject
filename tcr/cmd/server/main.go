@@ -1,56 +1,127 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"log"
-	"path/filepath"
+	"os"
+	"strings"
+	"tcr/internal/game"
 	"tcr/internal/storage"
 )
 
 func main() {
-	fmt.Println("Text-Based Clash Royale (TCR) - Server")
-	fmt.Println("=======================================")
-	fmt.Println("Server initialized - Phase 0")
+	fmt.Println("Starting TCR Server...")
 
-	// Initialize paths
-	configsPath := filepath.Join(".", "configs")
-	playersPath := filepath.Join(".", "data", "players")
+	// For Phase 1, we'll just test the game logic without networking
+	fmt.Println("Running Simple TCR Offline Test")
+	testSimpleTCR()
+}
 
-	// Initialize JSON handler for loading game data
-	jsonHandler := storage.NewJSONHandler(configsPath, playersPath)
+// mapTowerID maps a simple numeric ID to the actual tower ID
+func mapTowerID(opponentUsername string, towerNumID string) string {
+	switch towerNumID {
+	case "1", "g1", "guard1":
+		return opponentUsername + "_GUARD1"
+	case "2", "g2", "guard2":
+		return opponentUsername + "_GUARD2"
+	case "3", "k", "king":
+		return opponentUsername + "_KING"
+	default:
+		return "" // Invalid ID
+	}
+}
 
-	// Load troop and tower specifications
-	troops, err := jsonHandler.LoadTroopSpecs()
+// getOpponentUsername returns the opponent's username
+func getOpponentUsername(currentPlayer string, playerA, playerB string) string {
+	if currentPlayer == playerA {
+		return playerB
+	}
+	return playerA
+}
+
+// testSimpleTCR tests the Simple TCR game logic in a console environment
+func testSimpleTCR() {
+	// Initialize storage handler for loading configs
+	jsonHandler := storage.NewJSONHandler("configs", "data/players")
+
+	// Load troop and tower specs
+	troopSpecs, err := jsonHandler.LoadTroopSpecs()
 	if err != nil {
-		log.Fatalf("Failed to load troop specifications: %v", err)
+		fmt.Printf("Error loading troop specs: %v\n", err)
+		return
 	}
 
-	towers, err := jsonHandler.LoadTowerSpecs()
+	towerSpecs, err := jsonHandler.LoadTowerSpecs()
 	if err != nil {
-		log.Fatalf("Failed to load tower specifications: %v", err)
+		fmt.Printf("Error loading tower specs: %v\n", err)
+		return
 	}
 
-	// Log successful loading of specifications
-	log.Printf("Successfully loaded %d troop specifications", len(troops))
-	log.Printf("Successfully loaded %d tower specifications", len(towers))
+	// Create a new game session
+	gameSession := game.NewGameSession("PlayerA", "PlayerB", troopSpecs, towerSpecs)
 
-	// Print out loaded troops and towers for verification
-	fmt.Println("\nLoaded Troops:")
-	for _, troop := range troops {
-		fmt.Printf("- %s (HP: %d, ATK: %d, DEF: %d, Mana: %d, EXP: %d)\n",
-			troop.Name, troop.BaseHP, troop.BaseATK, troop.BaseDEF, troop.ManaCost, troop.DestroyEXP)
-		if troop.SpecialAbility != "" {
-			fmt.Printf("  Special Ability: %s\n", troop.SpecialAbility)
+	// Print initial game state
+	fmt.Println("\n=== Initial Game State ===")
+	fmt.Println(gameSession.GetGameStateInfo())
+
+	// Start game loop
+	reader := bufio.NewReader(os.Stdin)
+
+	for !gameSession.GameState.IsGameOver {
+		currentPlayer := gameSession.GameState.CurrentTurn
+		opponentPlayer := getOpponentUsername(currentPlayer, gameSession.GameState.PlayerA.Username, gameSession.GameState.PlayerB.Username)
+
+		fmt.Println("\n=== Commands ===")
+		fmt.Println("  d <troop_name> <tower_number> - Deploy a troop to attack a tower")
+		fmt.Println("  Tower numbers: 1=Guard1, 2=Guard2, 3=King")
+		fmt.Println("  quit - Exit the game")
+		fmt.Printf("\n%s's turn> ", currentPlayer)
+
+		// Read user input
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if input == "quit" {
+			break
+		}
+
+		// Parse command
+		parts := strings.Split(input, " ")
+		if len(parts) == 0 {
+			continue
+		}
+
+		// Check if command is deploy or d
+		if parts[0] == "deploy" || parts[0] == "d" {
+			if len(parts) != 3 {
+				fmt.Println("Invalid deploy command. Usage: d <troop_name> <tower_number>")
+				continue
+			}
+
+			troopName := parts[1]
+			towerID := mapTowerID(opponentPlayer, parts[2])
+
+			if towerID == "" {
+				fmt.Println("Invalid tower number. Use 1 for Guard1, 2 for Guard2, 3 for King.")
+				continue
+			}
+
+			message, success := gameSession.DeployTroop(currentPlayer, troopName, towerID)
+			fmt.Println(message)
+
+			if success {
+				// Print updated game state
+				fmt.Println("\n=== Updated Game State ===")
+				fmt.Println(gameSession.GetGameStateInfo())
+			}
+		} else {
+			fmt.Println("Unknown command. Available commands: d (deploy), quit")
 		}
 	}
 
-	fmt.Println("\nLoaded Towers:")
-	for _, tower := range towers {
-		fmt.Printf("- %s (Type: %s, HP: %d, ATK: %d, DEF: %d, CRIT: %d%%, EXP: %d)\n",
-			tower.Name, tower.Type, tower.BaseHP, tower.BaseATK, tower.BaseDEF,
-			tower.CritChancePercent, tower.DestroyEXP)
+	// Game over
+	if gameSession.GameState.IsGameOver {
+		fmt.Println("\n=== GAME OVER ===")
+		fmt.Printf("Winner: %s\n", gameSession.GameState.Winner)
 	}
-
-	// This is a placeholder for the server implementation in future phases
-	log.Println("Server application initialized in Phase 0")
 }
