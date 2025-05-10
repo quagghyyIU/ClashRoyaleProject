@@ -2,19 +2,58 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"tcr/internal/game"
+	"tcr/internal/network"
 	"tcr/internal/storage"
 )
 
 func main() {
+	// Define command line flags
+	mode := flag.String("mode", "network", "Run mode: 'network' for network server or 'offline' for offline test")
+	addr := flag.String("addr", ":8080", "Network address to listen on (host:port)")
+	flag.Parse()
+
 	fmt.Println("Starting TCR Server...")
 
-	// For Phase 1, we'll just test the game logic without networking
-	fmt.Println("Running Simple TCR Offline Test")
-	testSimpleTCR()
+	// Run in the specified mode
+	if *mode == "offline" {
+		fmt.Println("Running Simple TCR Offline Test")
+		testSimpleTCR()
+	} else {
+		fmt.Printf("Starting network server on %s\n", *addr)
+		runNetworkServer(*addr)
+	}
+}
+
+// runNetworkServer starts the TCP server and listens for connections
+func runNetworkServer(addr string) {
+	// Create the server
+	server := network.NewServer(addr)
+
+	// Set up signal handler for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start the server in a goroutine
+	go func() {
+		err := server.Start()
+		if err != nil {
+			fmt.Printf("Server error: %v\n", err)
+			close(sigCh) // Signal to exit
+		}
+	}()
+
+	// Wait for termination signal
+	<-sigCh
+	fmt.Println("\nShutting down server...")
+	server.Stop()
+	fmt.Println("Server shutdown complete")
 }
 
 // mapTowerID maps a simple numeric ID to the actual tower ID
