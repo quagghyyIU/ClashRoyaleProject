@@ -32,12 +32,14 @@ Game data is stored in JSON configuration files under the `configs/` directory:
 
 ## Development Status
 
-Currently in Phase 1 of development, which includes:
-- Project structure setup
-- Core data structures and configuration files
-- Basic loading utilities
-- Complete game logic implementation for Simple TCR
-- Offline testing functionality
+Currently in Phase 2 of development, which includes:
+- Project structure setup ✅
+- Core data structures and configuration files ✅
+- Basic loading utilities ✅
+- Complete game logic implementation for Simple TCR ✅
+- Offline testing functionality ✅
+- Basic TCP client-server communication ✅
+- Login and user identification ✅
 
 ## Simple TCR Game Rules
 
@@ -48,15 +50,17 @@ In Simple TCR mode:
 4. The Queen troop can be deployed to heal the friendly tower with the lowest HP percentage
 5. The game ends when a player's King Tower is destroyed
 
-## How to Run (Phase 1)
+## How to Run
+
+### Phase 1: Offline Testing
 
 To test the Simple TCR game logic in offline mode:
 
-1. Build and run the server:
+1. Build and run the server with the offline flag:
    ```bash
    cd tcr
    go build ./cmd/server
-   ./server
+   ./server -mode offline
    ```
 
 2. Follow the on-screen prompts to play the game:
@@ -66,17 +70,48 @@ To test the Simple TCR game logic in offline mode:
    - Examples: `d Pawn 1` to attack Guard Tower 1, `d Knight 3` to attack King Tower (if valid)
    - To deploy the Queen and use her healing ability, use: `d Queen 1` (the target number doesn't matter)
 
-## Current Limitations in Phase 1
+### Phase 2: Network Testing
 
-- **Troop Exhaustion**: Troops are consumed after deployment and not replenished. Players start with 3 regular troops plus special troops (Queen). If a player runs out of troops, they won't be able to attack. Troop replenishment will be addressed in future phases.
-- **Simple Command Interface**: The current implementation uses a basic console interface. A more sophisticated UI will be implemented in later phases.
+To test the client-server networking:
+
+1. Start the server:
+   ```bash
+   cd tcr
+   go build ./cmd/server
+   ./server -addr :8080
+   ```
+
+2. In a separate terminal, start a client:
+   ```bash
+   cd tcr
+   go build ./cmd/client
+   ./client -addr localhost:8080
+   ```
+
+3. Enter a username when prompted.
+4. The client will connect to the server and log in.
+5. You can start additional clients to test multiple connections.
+
+## Network Protocol
+
+TCR uses a simple network protocol based on JSON messages with length-prefixed framing:
+1. Each message is encoded as JSON
+2. A 4-byte header containing the length of the JSON message is prepended
+3. Messages include a type and a payload specific to that type
+
+For details on the protocol and message formats, see `doc/ApplicationPDUDescription.md`.
+
+## Current Limitations
+
+- **Phase 1**: Troop exhaustion - Troops are consumed after deployment and not replenished. Players start with 3 regular troops plus special troops (Queen).
+- **Phase 2**: Limited command support - The networking layer currently only supports basic connection and login. Game actions will be implemented in Phase 3.
 
 ## Coming Soon
 
 The next phases will implement:
-- Network communication between client and server
-- Enhanced TCR with real-time gameplay
-- Mana system
-- Critical hits
-- Player progression with experience and leveling
-- Troop replenishment mechanism
+- Integration of networked gameplay for Simple TCR (Phase 3)
+- Enhanced TCR with real-time gameplay (Phase 4)
+- Mana system (Phase 4)
+- Critical hits (Phase 4)
+- Player progression with experience and leveling (Phases 4-5)
+- Troop replenishment mechanism (Phase 3-4)
