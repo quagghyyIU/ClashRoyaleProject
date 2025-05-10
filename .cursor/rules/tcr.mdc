@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 always read plan.md to know what are you really doing in the project, ask me anything if any information is vague or unclear before execute the task
 always check every old phases, old document for any errors or not implement yet 1st before doing any new phases 

@@ -5,53 +5,123 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"tcr/internal/models"
 )
 
-// JSONHandler handles loading and saving JSON data
+// JSONHandler handles JSON file operations
 type JSONHandler struct {
-	ConfigsPath string
-	PlayersPath string
+	ConfigDir string
+	DataDir   string
+	mutex     sync.Mutex
 }
 
-// NewJSONHandler creates a new JSONHandler with the given paths
-func NewJSONHandler(configsPath, playersPath string) *JSONHandler {
+// UserData represents user account data
+type UserData struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// NewJSONHandler creates a new JSON handler
+func NewJSONHandler(configDir, dataDir string) *JSONHandler {
 	return &JSONHandler{
-		ConfigsPath: configsPath,
-		PlayersPath: playersPath,
+		ConfigDir: configDir,
+		DataDir:   dataDir,
 	}
 }
 
-// LoadTroopSpecs loads troop specifications from troops.json
+// LoadTroopSpecs loads troop specifications from a JSON file
 func (h *JSONHandler) LoadTroopSpecs() ([]models.TroopSpec, error) {
-	troopsFilePath := filepath.Join(h.ConfigsPath, "troops.json")
-	data, err := os.ReadFile(troopsFilePath)
+	filePath := filepath.Join(h.ConfigDir, "troops.json")
+	file, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("error reading troops.json: %w", err)
+		return nil, fmt.Errorf("failed to read troop specs file: %w", err)
 	}
 
 	var troops []models.TroopSpec
-	if err := json.Unmarshal(data, &troops); err != nil {
-		return nil, fmt.Errorf("error unmarshaling troops data: %w", err)
+	err = json.Unmarshal(file, &troops)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse troop specs JSON: %w", err)
 	}
 
 	return troops, nil
 }
 
-// LoadTowerSpecs loads tower specifications from towers.json
+// LoadTowerSpecs loads tower specifications from a JSON file
 func (h *JSONHandler) LoadTowerSpecs() ([]models.TowerSpec, error) {
-	towersFilePath := filepath.Join(h.ConfigsPath, "towers.json")
-	data, err := os.ReadFile(towersFilePath)
+	filePath := filepath.Join(h.ConfigDir, "towers.json")
+	file, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("error reading towers.json: %w", err)
+		return nil, fmt.Errorf("failed to read tower specs file: %w", err)
 	}
 
 	var towers []models.TowerSpec
-	if err := json.Unmarshal(data, &towers); err != nil {
-		return nil, fmt.Errorf("error unmarshaling towers data: %w", err)
+	err = json.Unmarshal(file, &towers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse tower specs JSON: %w", err)
 	}
 
 	return towers, nil
+}
+
+// SaveUserData saves user login data to a JSON file
+func (h *JSONHandler) SaveUserData(user UserData) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	// Ensure the users directory exists
+	usersDir := filepath.Join(h.DataDir, "users")
+	if err := os.MkdirAll(usersDir, 0755); err != nil {
+		return fmt.Errorf("failed to create users directory: %w", err)
+	}
+
+	// Create the file path
+	filePath := filepath.Join(usersDir, user.Username+".json")
+
+	// Marshal user data to JSON
+	data, err := json.MarshalIndent(user, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal user data: %w", err)
+	}
+
+	// Write the file
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write user data file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadUserData loads user login data from a JSON file
+func (h *JSONHandler) LoadUserData(username string) (UserData, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	// Get the file path
+	usersDir := filepath.Join(h.DataDir, "users")
+	filePath := filepath.Join(usersDir, username+".json")
+
+	// Read the file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return UserData{}, fmt.Errorf("failed to read user data file: %w", err)
+	}
+
+	// Unmarshal JSON to user data
+	var user UserData
+	if err := json.Unmarshal(data, &user); err != nil {
+		return UserData{}, fmt.Errorf("failed to parse user data JSON: %w", err)
+	}
+
+	return user, nil
+}
+
+// UserExists checks if a user already exists
+func (h *JSONHandler) UserExists(username string) bool {
+	usersDir := filepath.Join(h.DataDir, "users")
+	filePath := filepath.Join(usersDir, username+".json")
+	_, err := os.Stat(filePath)
+	return err == nil
 }
 
 // SavePlayerData saves player data to a JSON file (for Enhanced TCR)
@@ -72,7 +142,7 @@ func (h *JSONHandler) SavePlayerData(username string, currentEXP, level int) err
 	}
 
 	filename := fmt.Sprintf("player_%s.json", username)
-	filePath := filepath.Join(h.PlayersPath, filename)
+	filePath := filepath.Join(h.DataDir, filename)
 
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
 		return fmt.Errorf("error writing player data file: %w", err)
@@ -84,7 +154,7 @@ func (h *JSONHandler) SavePlayerData(username string, currentEXP, level int) err
 // LoadPlayerData loads player data from a JSON file (for Enhanced TCR)
 func (h *JSONHandler) LoadPlayerData(username string) (int, int, error) {
 	filename := fmt.Sprintf("player_%s.json", username)
-	filePath := filepath.Join(h.PlayersPath, filename)
+	filePath := filepath.Join(h.DataDir, filename)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {

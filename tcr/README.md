@@ -92,6 +92,55 @@ To test the client-server networking:
 4. The client will connect to the server and log in.
 5. You can start additional clients to test multiple connections.
 
+### Phase 3: Full Networked Game
+
+To play the Simple TCR game over the network in Phase 3:
+
+1. Start the server:
+   ```bash
+   cd tcr
+   go build ./cmd/server
+   ./server -addr :8080
+   ```
+
+2. Start two clients in separate terminals:
+   ```bash
+   cd tcr
+   go build ./cmd/client
+   ./client -addr localhost:8080
+   ```
+
+3. Choose to register a new account or login with an existing account.
+   - Enter your username and password when prompted.
+   - User accounts are stored securely on the server.
+
+4. Once two players are connected, a game will automatically start.
+5. Players take turns deploying troops to attack the opponent's towers.
+6. Available commands during the game:
+   - `d <troop_name>` - Deploy a troop (auto-targeting is enabled)
+     - Example: `d Knight` to deploy Knight to attack the next valid target
+     - Example: `d Queen` to deploy the Queen and heal your lowest HP tower
+   - `status` - Display the current game status
+   - `help` - Display available commands
+   - `quit` - Exit the game
+
+7. Game rules apply as described above:
+   - The client automatically targets enemy towers in the correct sequence:
+     - Guard Tower 1 must be destroyed before attacking Guard Tower 2 or King Tower
+   - Queen heals your tower with the lowest HP and is consumed
+   - A troop that destroys a tower gets a second attack in the same turn
+   - The game ends when a player's King Tower is destroyed
+
+## User Account System
+
+TCR now includes a simple user account system:
+
+1. **Registration**: New users can create an account with a username and password.
+2. **Authentication**: Users must provide valid credentials to log in.
+3. **Session Management**: The server prevents multiple logins with the same account.
+
+User data is stored in JSON format in the `data/users/` directory on the server.
+
 ## Network Protocol
 
 TCR uses a simple network protocol based on JSON messages with length-prefixed framing:
