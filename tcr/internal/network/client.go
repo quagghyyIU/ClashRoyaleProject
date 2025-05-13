@@ -14,6 +14,10 @@ type GameClient struct {
 	Connected    bool
 	LoggedIn     bool
 	PlayerID     string
+	InGame       bool
+	MyTurn       bool
+	OpponentName string
+	GameMode     string
 	MessageCh    chan models.GenericMessage
 	DisconnectCh chan error
 }
@@ -24,6 +28,8 @@ func NewClient(addr string) *GameClient {
 		Addr:         addr,
 		Connected:    false,
 		LoggedIn:     false,
+		InGame:       false,
+		MyTurn:       false,
 		MessageCh:    make(chan models.GenericMessage, 10),
 		DisconnectCh: make(chan error, 1),
 	}
@@ -51,13 +57,15 @@ func (c *GameClient) Disconnect() error {
 		err := c.conn.Close()
 		c.Connected = false
 		c.LoggedIn = false
+		c.InGame = false
+		c.MyTurn = false
 		return err
 	}
 	return nil
 }
 
 // Login sends a login request to the server
-func (c *GameClient) Login(username string) error {
+func (c *GameClient) Login(username, password string) error {
 	if !c.Connected {
 		return fmt.Errorf("not connected to server")
 	}
@@ -67,6 +75,7 @@ func (c *GameClient) Login(username string) error {
 	// Prepare login request
 	loginPayload := models.LoginRequestPayload{
 		Username: username,
+		Password: password,
 	}
 
 	message := models.GenericMessage{
@@ -78,11 +87,55 @@ func (c *GameClient) Login(username string) error {
 	return WriteMessage(c.conn, message)
 }
 
+// Register sends a registration request to the server
+func (c *GameClient) Register(username, password string) error {
+	if !c.Connected {
+		return fmt.Errorf("not connected to server")
+	}
+
+	// Prepare registration request
+	registerPayload := models.RegisterRequestPayload{
+		Username: username,
+		Password: password,
+	}
+
+	message := models.GenericMessage{
+		Type:    models.MsgTypeRegisterRequest,
+		Payload: registerPayload,
+	}
+
+	// Send registration request
+	return WriteMessage(c.conn, message)
+}
+
+// DeployTroop sends a deploy troop command to the server
+func (c *GameClient) DeployTroop(troopName, targetTowerID string) error {
+	if !c.Connected || !c.InGame {
+		return fmt.Errorf("not in game")
+	}
+
+	// Prepare deploy troop command
+	deployPayload := models.DeployTroopCommandPayload{
+		TroopName:     troopName,
+		TargetTowerID: targetTowerID,
+	}
+
+	message := models.GenericMessage{
+		Type:    models.MsgTypeDeployTroopCommand,
+		Payload: deployPayload,
+	}
+
+	// Send deploy troop command
+	return WriteMessage(c.conn, message)
+}
+
 // listen listens for messages from the server
 func (c *GameClient) listen() {
 	defer func() {
 		c.Connected = false
 		c.LoggedIn = false
+		c.InGame = false
+		c.MyTurn = false
 		c.DisconnectCh <- fmt.Errorf("disconnected from server")
 	}()
 
@@ -97,10 +150,22 @@ func (c *GameClient) listen() {
 		switch message.Type {
 		case models.MsgTypeLoginResponse:
 			c.handleLoginResponse(message.Payload)
-		default:
-			// Forward message to channel for processing by the main client
-			c.MessageCh <- message
+		case models.MsgTypeRegisterResponse:
+			// Just forward to channel for display
+		case models.MsgTypeGameStartNotification:
+			c.handleGameStartNotification(message.Payload)
+		case models.MsgTypeGameStateUpdate:
+			c.handleGameStateUpdate(message.Payload)
+		case models.MsgTypeTurnNotification:
+			c.handleTurnNotification(message.Payload)
+		case models.MsgTypeActionResult:
+			// Just forward to channel for display
+		case models.MsgTypeGameOverNotification:
+			c.handleGameOverNotification(message.Payload)
 		}
+
+		// Forward all messages to channel for processing by the main client
+		c.MessageCh <- message
 	}
 }
 
@@ -118,7 +183,7 @@ func (c *GameClient) handleLoginResponse(payload interface{}) {
 		return
 	}
 
-	// If login successful, update client state
+	// Update client state based on login success
 	if success {
 		c.LoggedIn = true
 
@@ -126,11 +191,60 @@ func (c *GameClient) handleLoginResponse(payload interface{}) {
 		if playerID, ok := responseMap["playerId"].(string); ok {
 			c.PlayerID = playerID
 		}
+	} else {
+		// Reset logged in state on failed login
+		c.LoggedIn = false
+		c.PlayerID = ""
+	}
+}
+
+// handleGameStartNotification handles a game start notification from the server
+func (c *GameClient) handleGameStartNotification(payload interface{}) {
+	// Parse game start notification payload
+	notifMap, ok := payload.(map[string]interface{})
+	if !ok {
+		return
 	}
 
-	// Forward message to channel for processing by the main client
-	c.MessageCh <- models.GenericMessage{
-		Type:    models.MsgTypeLoginResponse,
-		Payload: payload,
+	// Extract opponent username and game mode
+	if opponentName, ok := notifMap["opponentUsername"].(string); ok {
+		c.OpponentName = opponentName
 	}
+
+	if gameMode, ok := notifMap["gameMode"].(string); ok {
+		c.GameMode = gameMode
+	}
+
+	// Set in-game flag
+	c.InGame = true
+}
+
+// handleGameStateUpdate handles a game state update from the server
+func (c *GameClient) handleGameStateUpdate(payload interface{}) {
+	// No state to update in the client structure, just forward to main for display
+}
+
+// handleTurnNotification handles a turn notification from the server
+func (c *GameClient) handleTurnNotification(payload interface{}) {
+	// Parse turn notification payload
+	turnMap, ok := payload.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	// Extract current turn username
+	currentTurn, ok := turnMap["currentTurnUsername"].(string)
+	if !ok {
+		return
+	}
+
+	// Check if it's this client's turn
+	c.MyTurn = (currentTurn == c.Username)
+}
+
+// handleGameOverNotification handles a game over notification from the server
+func (c *GameClient) handleGameOverNotification(payload interface{}) {
+	// Reset game state
+	c.InGame = false
+	c.MyTurn = false
 }
