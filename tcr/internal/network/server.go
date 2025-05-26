@@ -7,6 +7,7 @@ import (
 	"sync"
 	"tcr/internal/game"
 	"tcr/internal/models"
+	"tcr/internal/shared"
 	"tcr/internal/storage"
 )
 
@@ -341,7 +342,7 @@ func (s *GameServer) tryMatchPlayer(client *Client) {
 // createGameSession creates a new game session between two players
 func (s *GameServer) createGameSession(playerA, playerB *Client) {
 	// Create game engine
-	gameEngine := game.NewGameSession(playerA.Username, playerB.Username, s.TroopSpecs, s.TowerSpecs)
+	gameEngine := game.NewGameSession(playerA.Username, playerB.Username, s.TroopSpecs, s.TowerSpecs, s.JSONHandler)
 
 	// Create game session
 	sessionID := fmt.Sprintf("%s_vs_%s", playerA.Username, playerB.Username)
@@ -423,7 +424,7 @@ func (s *GameServer) createPlayerState(player *game.Player) models.PlayerState {
 		ID:        player.KingTower.ID,
 		Type:      player.KingTower.Spec.Type,
 		CurrentHP: player.KingTower.CurrentHP,
-		MaxHP:     player.KingTower.Spec.BaseHP,
+		MaxHP:     player.KingTower.MaxHP,
 		Attack:    player.KingTower.CurrentATK,
 		Defense:   player.KingTower.CurrentDEF,
 		Destroyed: player.KingTower.Destroyed,
@@ -433,7 +434,7 @@ func (s *GameServer) createPlayerState(player *game.Player) models.PlayerState {
 		ID:        player.GuardTower1.ID,
 		Type:      player.GuardTower1.Spec.Type,
 		CurrentHP: player.GuardTower1.CurrentHP,
-		MaxHP:     player.GuardTower1.Spec.BaseHP,
+		MaxHP:     player.GuardTower1.MaxHP,
 		Attack:    player.GuardTower1.CurrentATK,
 		Defense:   player.GuardTower1.CurrentDEF,
 		Destroyed: player.GuardTower1.Destroyed,
@@ -443,7 +444,7 @@ func (s *GameServer) createPlayerState(player *game.Player) models.PlayerState {
 		ID:        player.GuardTower2.ID,
 		Type:      player.GuardTower2.Spec.Type,
 		CurrentHP: player.GuardTower2.CurrentHP,
-		MaxHP:     player.GuardTower2.Spec.BaseHP,
+		MaxHP:     player.GuardTower2.MaxHP,
 		Attack:    player.GuardTower2.CurrentATK,
 		Defense:   player.GuardTower2.CurrentDEF,
 		Destroyed: player.GuardTower2.Destroyed,
@@ -594,12 +595,58 @@ func (s *GameServer) handleDeployTroop(client *Client, payload interface{}) {
 
 // handleGameOver handles game over events
 func (s *GameServer) handleGameOver(session *GameSession) {
-	winner := session.GameEngine.GameState.Winner
+	winnerUsername := session.GameEngine.GameState.Winner // Username of the winner
+	var winningPlayer *game.Player
+	var losingPlayer *game.Player
 
-	// Create game over notification
+	// Determine player objects
+	if winnerUsername == session.PlayerA.Username {
+		winningPlayer = session.GameEngine.GameState.PlayerA
+		losingPlayer = session.GameEngine.GameState.PlayerB
+	} else if winnerUsername == session.PlayerB.Username {
+		winningPlayer = session.GameEngine.GameState.PlayerB
+		losingPlayer = session.GameEngine.GameState.PlayerA
+	} else {
+		// This case implies a draw or game ended without a clear winner from GameState
+		// For now, we assume a winner is always set if King Tower is destroyed.
+		// If draw mechanics are added, this section will need adjustment.
+		log.Printf("Game Over for session %s. No clear winner or draw declared in GameState.Winner. Current EXP not changed for win/loss.", session.GameEngine.GameState.PlayerA.Username+"_vs_"+session.GameEngine.GameState.PlayerB.Username)
+		// Save data for both players even if no win/loss EXP is awarded
+		pA := session.GameEngine.GameState.PlayerA
+		pB := session.GameEngine.GameState.PlayerB
+		if err := s.JSONHandler.SavePlayerData(pA.Username, pA.CurrentEXP, pA.Level); err != nil {
+			log.Printf("Error saving player data for %s: %v", pA.Username, err)
+		}
+		if err := s.JSONHandler.SavePlayerData(pB.Username, pB.CurrentEXP, pB.Level); err != nil {
+			log.Printf("Error saving player data for %s: %v", pB.Username, err)
+		}
+		// Proceed with standard game over notification without win/loss EXP messages
+	}
+
+	if winningPlayer != nil { // If there was a winner
+		log.Printf("Player %s won. Awarding %d EXP.", winnerUsername, shared.WinEXPReward)
+		winningPlayer.CurrentEXP += shared.WinEXPReward
+		levelUpMsgWinner := session.GameEngine.HandleExperienceAndLevelUp(winningPlayer)
+		if levelUpMsgWinner != "" {
+			log.Printf("Post-game level up for winner %s: %s", winnerUsername, levelUpMsgWinner)
+			// This message could be appended to the GameOverNotification or sent separately
+		}
+		if err := s.JSONHandler.SavePlayerData(winningPlayer.Username, winningPlayer.CurrentEXP, winningPlayer.Level); err != nil {
+			log.Printf("Error saving player data for winner %s: %v", winningPlayer.Username, err)
+		}
+
+		// Save loser's data as well (their EXP might have changed from destroying units)
+		if losingPlayer != nil {
+			if err := s.JSONHandler.SavePlayerData(losingPlayer.Username, losingPlayer.CurrentEXP, losingPlayer.Level); err != nil {
+				log.Printf("Error saving player data for loser %s: %v", losingPlayer.Username, err)
+			}
+		}
+	} // Add logic for DrawEXPReward if draw state is possible and distinct from no winner.
+
+	// Create game over notification (original logic)
 	gameOverPayload := models.GameOverNotificationPayload{
-		WinnerUsername: winner,
-		Reason:         "King Tower destroyed",
+		WinnerUsername: winnerUsername,         // This remains the same
+		Reason:         "King Tower destroyed", // Or other reason
 	}
 
 	gameOverMsg := models.GenericMessage{
@@ -608,18 +655,39 @@ func (s *GameServer) handleGameOver(session *GameSession) {
 	}
 
 	// Send to both players
-	WriteMessage(session.PlayerA.Conn, gameOverMsg)
-	WriteMessage(session.PlayerB.Conn, gameOverMsg)
+	if session.PlayerA != nil && session.PlayerA.Conn != nil {
+		WriteMessage(session.PlayerA.Conn, gameOverMsg)
+	}
+	if session.PlayerB != nil && session.PlayerB.Conn != nil {
+		WriteMessage(session.PlayerB.Conn, gameOverMsg)
+	}
 
-	// Clean up game session
+	// Clean up game session (original logic)
 	s.mutex.Lock()
-	session.PlayerA.InGame = false
-	session.PlayerB.InGame = false
-	for id, gs := range s.GameSessions {
-		if gs == session {
-			delete(s.GameSessions, id)
-			break
-		}
+	if session.PlayerA != nil {
+		session.PlayerA.InGame = false
+	}
+	if session.PlayerB != nil {
+		session.PlayerB.InGame = false
+	}
+	// Use a safe way to identify the session before deleting
+	// This assumes session IDs are formed by player names, which might need to be more robust
+	var sessionID string
+	if session.PlayerA != nil && session.PlayerB != nil {
+		sessionID = session.PlayerA.Username + "_vs_" + session.PlayerB.Username
+	} else if session.PlayerA != nil {
+		// Fallback or handle case where PlayerB might be nil (e.g. disconnected earlier)
+		sessionID = session.PlayerA.Username + "_vs_unknown"
+	} else if session.PlayerB != nil {
+		sessionID = "unknown_vs_" + session.PlayerB.Username
+	}
+	// else if both are nil, sessionID remains empty, delete might not work as expected
+
+	if sessionID != "" {
+		delete(s.GameSessions, sessionID)
+		log.Printf("Cleaned up game session: %s", sessionID)
+	} else {
+		log.Printf("Could not determine session ID for cleanup. Session players: A=%v, B=%v", session.PlayerA, session.PlayerB)
 	}
 	s.mutex.Unlock()
 }
@@ -628,7 +696,28 @@ func (s *GameServer) handleGameOver(session *GameSession) {
 func (s *GameServer) handlePlayerDisconnect(client *Client) {
 	session := s.getSessionForPlayer(client)
 	if session == nil {
+		log.Printf("Player %s disconnected, was not in an active game session.", client.Username)
 		return
+	}
+
+	log.Printf("Player %s disconnected from game session.", client.Username)
+
+	// Save the disconnecting player's data
+	var disconnectedPlayerGameObj *game.Player
+	if client.Username == session.GameEngine.GameState.PlayerA.Username {
+		disconnectedPlayerGameObj = session.GameEngine.GameState.PlayerA
+	} else if client.Username == session.GameEngine.GameState.PlayerB.Username {
+		disconnectedPlayerGameObj = session.GameEngine.GameState.PlayerB
+	}
+
+	if disconnectedPlayerGameObj != nil {
+		if err := s.JSONHandler.SavePlayerData(disconnectedPlayerGameObj.Username, disconnectedPlayerGameObj.CurrentEXP, disconnectedPlayerGameObj.Level); err != nil {
+			log.Printf("Error saving player data for disconnecting player %s: %v", disconnectedPlayerGameObj.Username, err)
+		} else {
+			log.Printf("Saved player data for disconnecting player %s (Level: %d, EXP: %d)", disconnectedPlayerGameObj.Username, disconnectedPlayerGameObj.Level, disconnectedPlayerGameObj.CurrentEXP)
+		}
+	} else {
+		log.Printf("Could not find game object for disconnecting player %s to save data.", client.Username)
 	}
 
 	// Determine the other player

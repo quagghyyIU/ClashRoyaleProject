@@ -229,6 +229,13 @@ func main() {
 		if !client.InGame { // In Lobby
 			fmt.Print("> ")
 			input, _ = reader.ReadString('\n')
+
+			// If the game started while we were waiting for lobby input,
+			// immediately re-evaluate client.InGame at the top of the loop.
+			if client.InGame {
+				continue
+			}
+
 			input = strings.TrimSpace(input)
 
 			if input == "quit" || input == "exit" {
@@ -243,7 +250,7 @@ func main() {
 				fmt.Println("")
 				fmt.Println("You are in the lobby waiting for a game to start.")
 				fmt.Println("Please wait for another player to connect...")
-				fmt.Println("==============================================")
+				fmt.Println("==============================================\n")
 			} else {
 				fmt.Println("Waiting for a game to start... (type 'help' for lobby commands or 'quit' to exit)")
 			}
@@ -251,7 +258,9 @@ func main() {
 		}
 
 		// --- In Game ---
+		// Refresh hand/target info if it's our turn, right before prompting
 		if client.MyTurn {
+			displayPlayerHandAndTargetInfo()
 			fmt.Print("Your turn - Enter command (d <troop_name>, status, help, quit): ")
 		} else {
 			fmt.Print("(Waiting for opponent... Type status, help, or quit): ")
@@ -265,13 +274,13 @@ func main() {
 
 		if input == "status" {
 			displayGameStatus(client)
-			displayPlayerHandAndTargetInfo()
+			// displayPlayerHandAndTargetInfo() // displayGameStatus might call this if it's our turn
 			continue
 		}
 
 		if input == "help" {
 			displayHelp()
-			displayPlayerHandAndTargetInfo()
+			// displayPlayerHandAndTargetInfo() // Help shouldn't necessarily redisplay hand
 			continue
 		}
 
@@ -334,28 +343,23 @@ func main() {
 
 			// Show clear feedback about what we're targeting
 			var targetDesc string
-			switch {
-			case targetTowerID == enemyGuardTower1.ID || strings.HasSuffix(targetTowerID, "_GUARD1"):
-				targetDesc = "Guard Tower 1"
-			case targetTowerID == enemyGuardTower2.ID || strings.HasSuffix(targetTowerID, "_GUARD2"):
-				targetDesc = "Guard Tower 2"
-			case targetTowerID == enemyKingTower.ID || strings.HasSuffix(targetTowerID, "_KING"):
+			if strings.Contains(targetTowerID, "KING") {
 				targetDesc = "King Tower"
-			default:
-				targetDesc = targetTowerID
-			}
-
-			if troopName == "Queen" {
-				fmt.Printf("Deploying Queen to heal your lowest HP tower\n")
+			} else if strings.Contains(targetTowerID, "GUARD1") {
+				targetDesc = "Guard Tower 1"
+			} else if strings.Contains(targetTowerID, "GUARD2") {
+				targetDesc = "Guard Tower 2"
 			} else {
-				fmt.Printf("Auto-targeting: Deploying %s to attack %s\n", troopName, targetDesc)
+				targetDesc = targetTowerID // fallback
 			}
+			fmt.Printf("\n>>> DEPLOYING %s to attack %s <<<\n", strings.ToUpper(troopName), targetDesc)
 
 			// Send deploy command
 			err := client.DeployTroop(troopName, targetTowerID)
 			if err != nil {
 				fmt.Printf("Error sending deploy command: %v\n", err)
 			}
+			continue // Wait for server updates before re-prompting
 		default:
 			fmt.Println("Unknown command. Type 'help' for list of commands.")
 		}
@@ -371,6 +375,14 @@ func main() {
 
 // handleServerMessages handles messages received from the server
 func handleServerMessages(client *network.GameClient, stopCh <-chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Recovered in handleServerMessages: %v\n", r)
+			// Optionally, decide if client should be marked as disconnected or attempt to re-establish
+		}
+		fmt.Println("Message handler stopped.")
+	}()
+
 	for {
 		select {
 		case <-stopCh:
@@ -385,13 +397,13 @@ func handleServerMessages(client *network.GameClient, stopCh <-chan struct{}) {
 			case models.MsgTypeErrorNotification:
 				handleErrorNotification(message.Payload)
 			case models.MsgTypeGameStartNotification:
-				handleGameStartNotification(message.Payload)
+				handleGameStartNotification(client, message.Payload)
 			case models.MsgTypeGameStateUpdate:
 				handleGameStateUpdate(client, message.Payload)
 			case models.MsgTypeTurnNotification:
 				handleTurnNotification(client, message.Payload)
 			case models.MsgTypeActionResult:
-				handleActionResult(message.Payload)
+				handleActionResult(client, message.Payload)
 			case models.MsgTypeGameOverNotification:
 				handleGameOverNotification(message.Payload)
 			}
@@ -472,20 +484,24 @@ func handleErrorNotification(payload interface{}) {
 }
 
 // handleGameStartNotification handles a game start notification from the server
-func handleGameStartNotification(payload interface{}) {
-	// Parse game start notification payload
-	notifMap, ok := payload.(map[string]interface{})
+func handleGameStartNotification(c *network.GameClient, payload interface{}) {
+	c.InGame = true
+	fmt.Println("\n==============================================")
+	fmt.Println("⚔️  GAME STARTING! ⚔️")
+	fmt.Println("==============================================")
+
+	gameStartMap, ok := payload.(map[string]interface{})
 	if !ok {
 		fmt.Println("Error parsing game start notification")
 		return
 	}
 
 	// Extract opponent username and game mode
-	opponentUsername, _ = notifMap["opponentUsername"].(string)
-	gameMode, _ = notifMap["gameMode"].(string)
+	opponentUsername, _ = gameStartMap["opponentUsername"].(string)
+	gameMode, _ = gameStartMap["gameMode"].(string)
 
 	// Extract player info
-	playerInfoMap, ok := notifMap["yourPlayerInfo"].(map[string]interface{})
+	playerInfoMap, ok := gameStartMap["yourPlayerInfo"].(map[string]interface{})
 	if ok {
 		// Store relevant player info
 		username, _ := playerInfoMap["username"].(string)
@@ -575,28 +591,33 @@ func parseTroopState(troopMap map[string]interface{}) models.TroopState {
 }
 
 // handleGameStateUpdate handles a game state update from the server
-func handleGameStateUpdate(client *network.GameClient, payload interface{}) {
-	// Parse game state update payload
-	stateMap, ok := payload.(map[string]interface{})
+func handleGameStateUpdate(c *network.GameClient, payload interface{}) {
+	updateMap, ok := payload.(map[string]interface{})
 	if !ok {
 		fmt.Println("Error parsing game state update")
 		return
 	}
 
-	// Extract current turn and last action log
-	currentTurn, _ = stateMap["currentTurn"].(string)
-	lastActionLog, _ = stateMap["lastActionLog"].(string)
+	// Update current turn
+	if turn, ok := updateMap["currentTurn"].(string); ok {
+		currentTurn = turn
+	}
+
+	// Update last action log
+	if lastActionLog, ok := updateMap["lastActionLog"].(string); ok {
+		lastActionLog = lastActionLog
+	}
 
 	// Extract player states
 	// Try to find our player and opponent in playerA or playerB
-	playerA, hasPlayerA := stateMap["playerA"].(map[string]interface{})
-	playerB, hasPlayerB := stateMap["playerB"].(map[string]interface{})
+	playerA, hasPlayerA := updateMap["playerA"].(map[string]interface{})
+	playerB, hasPlayerB := updateMap["playerB"].(map[string]interface{})
 
 	if hasPlayerA && hasPlayerB {
 		playerAUsername, _ := playerA["username"].(string)
 		// Determine which is our player and which is opponent
 		var myPlayerMap, enemyPlayerMap map[string]interface{}
-		if playerAUsername == client.Username {
+		if playerAUsername == c.Username {
 			myPlayerMap = playerA
 			enemyPlayerMap = playerB
 		} else {
@@ -639,7 +660,14 @@ func handleGameStateUpdate(client *network.GameClient, payload interface{}) {
 
 	// Log the update
 	if lastActionLog != "" {
-		fmt.Printf("\n>>> %s\n", lastActionLog)
+		fmt.Println("==============================================")
+		fmt.Printf("⚡ ACTION: %s ⚡\n", lastActionLog)
+		fmt.Println("==============================================")
+	}
+
+	// Display game status if it's not our turn (to see opponent's move results)
+	if currentTurn != c.Username {
+		displayGameStatus(c)
 	}
 }
 
@@ -654,48 +682,29 @@ func handleTurnNotification(client *network.GameClient, payload interface{}) {
 
 	// Extract current turn username
 	username, _ := turnMap["currentTurnUsername"].(string)
-	fmt.Printf("\n=== It's %s's turn ===\n", username)
+	currentTurn = username // Correct: Update the package-level currentTurn variable
 
-	// If it's my turn, display available troops and valid targets
+	fmt.Println("\n==============================================")
+	fmt.Printf("🔔 It's %s's turn! 🔔\n", username)
+	fmt.Println("==============================================")
+
 	if username == client.Username {
-		displayPlayerHandAndTargetInfo()
+		client.MyTurn = true             // Set MyTurn flag
+		displayPlayerHandAndTargetInfo() // Display hand immediately when it becomes our turn
+	} else {
+		client.MyTurn = false
 	}
 }
 
 // displayPlayerHandAndTargetInfo displays the player's current hand and auto-target
 func displayPlayerHandAndTargetInfo() {
-	fmt.Println("\n=== Your Available Troops ===")
-	if len(myTroops) == 0 {
-		fmt.Println("No troops available at the moment.")
-	} else {
-		for _, troop := range myTroops {
-			fmt.Printf("%s: HP %d, ATK %d, DEF %d\n",
-				troop.Name, troop.HP, troop.Attack, troop.Defense)
-		}
-	}
-
-	fmt.Println("\n=== Current Target ===")
-
-	// Display the current auto-target based on enemy tower status
-	if !enemyGuardTower1.Destroyed {
-		fmt.Printf("Auto-targeting: %s (Guard Tower 1): HP %d/%d, DEF %d\n",
-			enemyGuardTower1.ID, enemyGuardTower1.CurrentHP, enemyGuardTower1.MaxHP, enemyGuardTower1.Defense)
-	} else if !enemyGuardTower2.Destroyed {
-		fmt.Printf("Auto-targeting: %s (Guard Tower 2): HP %d/%d, DEF %d\n",
-			enemyGuardTower2.ID, enemyGuardTower2.CurrentHP, enemyGuardTower2.MaxHP, enemyGuardTower2.Defense)
-	} else if !enemyKingTower.Destroyed {
-		fmt.Printf("Auto-targeting: %s (King Tower): HP %d/%d, DEF %d\n",
-			enemyKingTower.ID, enemyKingTower.CurrentHP, enemyKingTower.MaxHP, enemyKingTower.Defense)
-	} else {
-		fmt.Println("All enemy towers are destroyed!")
-	}
-
-	// Special note for Queen
+	fmt.Println("\n🖐️ === Your Available Troops === 🖐️")
 	hasQueen := false
 	for _, troop := range myTroops {
+		fmt.Printf("%s: HP %d, ATK %d, DEF %d\n",
+			troop.Name, troop.HP, troop.Attack, troop.Defense)
 		if troop.Name == "Queen" {
 			hasQueen = true
-			break
 		}
 	}
 
@@ -721,7 +730,7 @@ func displayPlayerHandAndTargetInfo() {
 }
 
 // handleActionResult handles an action result from the server
-func handleActionResult(payload interface{}) {
+func handleActionResult(client *network.GameClient, payload interface{}) {
 	// Parse action result payload
 	resultMap, ok := payload.(map[string]interface{})
 	if !ok {
@@ -736,9 +745,14 @@ func handleActionResult(payload interface{}) {
 	// Print result
 	if success {
 		fmt.Printf("Action successful: %s\n", message)
+		// If action was successful, MyTurn will be updated by a subsequent TurnNotification or GameStateUpdate
+		// No need to set client.MyTurn here.
 	} else {
 		fmt.Printf("Action failed: %s\n", message)
 		fmt.Println("Please try again.")
+		// If the action failed for a reason that doesn't end the turn (e.g. invalid troop),
+		// ensure it's still the player's turn so they can retry.
+		client.MyTurn = true
 	}
 }
 
@@ -759,81 +773,53 @@ func handleGameOverNotification(payload interface{}) {
 	fmt.Printf("Winner: %s\n", winner)
 	fmt.Printf("Reason: %s\n", reason)
 	fmt.Println("Starting a new game when another player connects...")
+	// client.InGame = false // This should be handled by the main loop or a specific disconnect message
+	// If a global client variable exists and is intended here, it needs to be used consistently.
+	// For now, assuming the `client.InGame` was a local var or a field of a passed-in client struct.
+	// If `client` is a global var, it should be `client.InGame = false`
 }
 
-// displayGameStatus displays the current game status
-func displayGameStatus(client *network.GameClient) {
-	fmt.Printf("\n=== Game Status ===\n")
-	fmt.Printf("Game Mode: %s\n", gameMode)
-	fmt.Printf("You: %s\n", client.Username)
-	fmt.Printf("Opponent: %s\n", client.OpponentName)
-	fmt.Printf("Current Turn: %s\n", currentTurn)
-	if lastActionLog != "" {
-		fmt.Printf("Last Action: %s\n", lastActionLog)
-	}
+// displayGameStatus displays the current game status in a more readable format
+func displayGameStatus(c *network.GameClient) {
+	fmt.Println("----------------------------------------------")
+	fmt.Printf("👑 Your King Tower (%s): HP %d/%d, ATK %d, DEF %d %s\n",
+		myKingTower.ID, myKingTower.CurrentHP, myKingTower.MaxHP, myKingTower.Attack, myKingTower.Defense,
+		formatDestroyedStatus(myKingTower.Destroyed))
+	fmt.Printf("🛡️ Your Guard Tower 1 (%s): HP %d/%d, ATK %d, DEF %d %s\n",
+		myGuardTower1.ID, myGuardTower1.CurrentHP, myGuardTower1.MaxHP, myGuardTower1.Attack, myGuardTower1.Defense,
+		formatDestroyedStatus(myGuardTower1.Destroyed))
+	fmt.Printf("🛡️ Your Guard Tower 2 (%s): HP %d/%d, ATK %d, DEF %d %s\n",
+		myGuardTower2.ID, myGuardTower2.CurrentHP, myGuardTower2.MaxHP, myGuardTower2.Attack, myGuardTower2.Defense,
+		formatDestroyedStatus(myGuardTower2.Destroyed))
+	fmt.Println("----------------------------------------------")
+	fmt.Printf("Opponent: %s\n", opponentUsername)
+	fmt.Printf("👑 Opponent's King Tower (%s): HP %d/%d, DEF %d %s\n",
+		enemyKingTower.ID, enemyKingTower.CurrentHP, enemyKingTower.MaxHP, enemyKingTower.Defense,
+		formatDestroyedStatus(enemyKingTower.Destroyed))
+	fmt.Printf("🛡️ Opponent's Guard Tower 1 (%s): HP %d/%d, DEF %d %s\n",
+		enemyGuardTower1.ID, enemyGuardTower1.CurrentHP, enemyGuardTower1.MaxHP, enemyGuardTower1.Defense,
+		formatDestroyedStatus(enemyGuardTower1.Destroyed))
+	fmt.Printf("🛡️ Opponent's Guard Tower 2 (%s): HP %d/%d, DEF %d %s\n",
+		enemyGuardTower2.ID, enemyGuardTower2.CurrentHP, enemyGuardTower2.MaxHP, enemyGuardTower2.Defense,
+		formatDestroyedStatus(enemyGuardTower2.Destroyed))
+	fmt.Println("----------------------------------------------")
 
-	fmt.Println("\n=== Your Towers ===")
-	var kingStatus, guard1Status, guard2Status string
-	if myKingTower.Destroyed {
-		kingStatus = " (DESTROYED)"
-	} else {
-		kingStatus = ""
+	// Display player's hand if it's their turn (or always, depending on preference)
+	if currentTurn == c.Username {
+		displayPlayerHandAndTargetInfo()
 	}
-	if myGuardTower1.Destroyed {
-		guard1Status = " (DESTROYED)"
-	} else {
-		guard1Status = ""
-	}
-	if myGuardTower2.Destroyed {
-		guard2Status = " (DESTROYED)"
-	} else {
-		guard2Status = ""
-	}
-
-	fmt.Printf("King Tower: HP %d/%d, ATK %d, DEF %d%s\n",
-		myKingTower.CurrentHP, myKingTower.MaxHP, myKingTower.Attack, myKingTower.Defense, kingStatus)
-	fmt.Printf("Guard Tower 1: HP %d/%d, ATK %d, DEF %d%s\n",
-		myGuardTower1.CurrentHP, myGuardTower1.MaxHP, myGuardTower1.Attack, myGuardTower1.Defense, guard1Status)
-	fmt.Printf("Guard Tower 2: HP %d/%d, ATK %d, DEF %d%s\n",
-		myGuardTower2.CurrentHP, myGuardTower2.MaxHP, myGuardTower2.Attack, myGuardTower2.Defense, guard2Status)
-
-	fmt.Println("\n=== Opponent Towers ===")
-	var enemyKingStatus, enemyGuard1Status, enemyGuard2Status string
-	if enemyKingTower.Destroyed {
-		enemyKingStatus = " (DESTROYED)"
-	} else {
-		enemyKingStatus = ""
-	}
-	if enemyGuardTower1.Destroyed {
-		enemyGuard1Status = " (DESTROYED)"
-	} else {
-		enemyGuard1Status = ""
-	}
-	if enemyGuardTower2.Destroyed {
-		enemyGuard2Status = " (DESTROYED)"
-	} else {
-		enemyGuard2Status = ""
-	}
-
-	fmt.Printf("King Tower: HP %d/%d, DEF %d%s\n",
-		enemyKingTower.CurrentHP, enemyKingTower.MaxHP, enemyKingTower.Defense, enemyKingStatus)
-	fmt.Printf("Guard Tower 1: HP %d/%d, DEF %d%s\n",
-		enemyGuardTower1.CurrentHP, enemyGuardTower1.MaxHP, enemyGuardTower1.Defense, enemyGuard1Status)
-	fmt.Printf("Guard Tower 2: HP %d/%d, DEF %d%s\n",
-		enemyGuardTower2.CurrentHP, enemyGuardTower2.MaxHP, enemyGuardTower2.Defense, enemyGuard2Status)
-
-	fmt.Println("\n=== Your Available Troops ===")
-	if len(myTroops) == 0 {
-		fmt.Println("No troops available")
-	} else {
-		for _, troop := range myTroops {
-			fmt.Printf("%s: HP %d, ATK %d, DEF %d\n",
-				troop.Name, troop.HP, troop.Attack, troop.Defense)
-		}
-	}
+	fmt.Println("==============================================")
 }
 
-// displayHelp displays help information
+// formatDestroyedStatus returns a string indicating if a tower is destroyed
+func formatDestroyedStatus(destroyed bool) string {
+	if destroyed {
+		return "(DESTROYED ☠️)"
+	}
+	return ""
+}
+
+// displayHelp displays the help information
 func displayHelp() {
 	fmt.Println("\n==============================================")
 	fmt.Println("📋 GAME COMMANDS 📋")
@@ -850,6 +836,15 @@ func displayHelp() {
 	fmt.Println("")
 	fmt.Println("System Commands:")
 	fmt.Println("  quit   - Exit the game")
+	fmt.Println("==============================================")
+	fmt.Println("Commands available IN GAME:")
+	fmt.Println("----------------------------------------------")
+	fmt.Println("  d <troop_name> - Deploy a troop (auto-targets enemy towers in sequence)")
+	fmt.Println("                   Example: d Pawn")
+	fmt.Println("                   (Queen will automatically heal your lowest HP tower)")
+	fmt.Println("  status         - Display current game status")
+	fmt.Println("  help           - Display this help information")
+	fmt.Println("  quit           - Forfeit the current game and exit")
 	fmt.Println("==============================================")
 }
 

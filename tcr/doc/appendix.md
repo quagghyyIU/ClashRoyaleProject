@@ -1,7 +1,7 @@
 Appendix
 Towers
 Type	HP	ATK	DEF	CRIT	EXP
-King Tower	2000	500	300	10%	200
+King Tower	1800	500	150	10%	200
 Guard Tower	1000	300	100	5%	100
 Troops
 Name	HP	ATK	DEF	MANA	EXP	Special

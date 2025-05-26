@@ -2,6 +2,7 @@ package game
 
 import (
 	"tcr/internal/models"
+	"tcr/internal/shared"
 )
 
 // Player represents a player in the game
@@ -23,6 +24,7 @@ type Player struct {
 type TowerInstance struct {
 	Spec       *models.TowerSpec
 	ID         string // e.g., "PlayerA_KingTower"
+	MaxHP      int    // Scaled maximum HP
 	CurrentHP  int
 	CurrentATK int
 	CurrentDEF int
@@ -46,18 +48,20 @@ func NewPlayer(username string) *Player {
 		Level:                   1,
 		CurrentEXP:              0,
 		CurrentMana:             0,
-		RequiredEXPForNextLevel: 100, // Base EXP required for level 2
+		RequiredEXPForNextLevel: shared.BaseEXPForLevelUp,
 	}
 }
 
 // NewTowerInstance creates a new tower instance from a tower spec
 func NewTowerInstance(spec *models.TowerSpec, playerUsername string, playerLevel int) *TowerInstance {
 	levelMultiplier := 1.0 + float64(playerLevel-1)*0.1
+	scaledMaxHP := int(float64(spec.BaseHP) * levelMultiplier)
 
 	return &TowerInstance{
 		Spec:       spec,
 		ID:         playerUsername + "_" + spec.Type,
-		CurrentHP:  int(float64(spec.BaseHP) * levelMultiplier),
+		MaxHP:      scaledMaxHP,
+		CurrentHP:  scaledMaxHP, // CurrentHP starts at MaxHP
 		CurrentATK: int(float64(spec.BaseATK) * levelMultiplier),
 		CurrentDEF: int(float64(spec.BaseDEF) * levelMultiplier),
 		Destroyed:  false,

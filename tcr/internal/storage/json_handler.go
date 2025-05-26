@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -156,14 +157,19 @@ func (h *JSONHandler) LoadPlayerData(username string) (int, int, error) {
 	filename := fmt.Sprintf("player_%s.json", username)
 	filePath := filepath.Join(h.DataDir, filename)
 
+	log.Printf("[LOADPLAYERDATA_DEBUG] Attempting to load player data for: Username='%s', FullPath='%s'", username, filePath)
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
+		log.Printf("[LOADPLAYERDATA_DEBUG] os.ReadFile error for '%s': %v. os.IsNotExist(err): %t", filePath, err, os.IsNotExist(err))
 		if os.IsNotExist(err) {
 			// If file doesn't exist, return default values
 			return 0, 1, nil
 		}
 		return 0, 1, fmt.Errorf("error reading player data file: %w", err)
 	}
+
+	log.Printf("[LOADPLAYERDATA_DEBUG] Successfully read data for '%s', length: %d", filePath, len(data))
 
 	var playerData struct {
 		Username   string `json:"username"`
@@ -172,8 +178,10 @@ func (h *JSONHandler) LoadPlayerData(username string) (int, int, error) {
 	}
 
 	if err := json.Unmarshal(data, &playerData); err != nil {
+		log.Printf("[LOADPLAYERDATA_DEBUG] JSON unmarshal error for '%s': %v", filePath, err)
 		return 0, 1, fmt.Errorf("error unmarshaling player data: %w", err)
 	}
 
+	log.Printf("[LOADPLAYERDATA_DEBUG] Successfully unmarshaled data for '%s': EXP=%d, Level=%d", filePath, playerData.CurrentEXP, playerData.Level)
 	return playerData.CurrentEXP, playerData.Level, nil
 }

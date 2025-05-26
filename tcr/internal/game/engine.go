@@ -2,31 +2,50 @@ package game
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"tcr/internal/models"
+	"tcr/internal/shared"
+	"tcr/internal/storage"
 	"time"
 )
 
 // GameSession represents a game session between two players
 type GameSession struct {
-	GameState  *GameState
-	TroopSpecs []models.TroopSpec // Available troops for both players
-	TowerSpecs []models.TowerSpec // Available towers for both players
+	GameState   *GameState
+	TroopSpecs  []models.TroopSpec   // Available troops for both players
+	TowerSpecs  []models.TowerSpec   // Available towers for both players
+	JSONHandler *storage.JSONHandler // Added to save player data
 }
 
 // NewGameSession creates a new game session with two players
-func NewGameSession(playerAName, playerBName string, troopSpecs []models.TroopSpec, towerSpecs []models.TowerSpec) *GameSession {
+func NewGameSession(playerAName, playerBName string, troopSpecs []models.TroopSpec, towerSpecs []models.TowerSpec, jsonHandler *storage.JSONHandler) *GameSession {
 	// Initialize random seed
 	rand.NewSource(time.Now().UnixNano())
 
 	// Create two players
 	playerA := NewPlayer(playerAName)
+	var err error
+	playerA.CurrentEXP, playerA.Level, err = jsonHandler.LoadPlayerData(playerAName)
+	if err != nil {
+		log.Printf("Error loading player data for %s: %v. Using default stats.", playerAName, err)
+		// Keep default NewPlayer stats (Level 1, 0 EXP)
+	}
+	playerA.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerA.Level)
+
 	playerB := NewPlayer(playerBName)
+	playerB.CurrentEXP, playerB.Level, err = jsonHandler.LoadPlayerData(playerBName)
+	if err != nil {
+		log.Printf("Error loading player data for %s: %v. Using default stats.", playerBName, err)
+		// Keep default NewPlayer stats (Level 1, 0 EXP)
+	}
+	playerB.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerB.Level)
 
 	// Initialize the game session
 	gs := &GameSession{
-		TroopSpecs: troopSpecs,
-		TowerSpecs: towerSpecs,
+		TroopSpecs:  troopSpecs,
+		TowerSpecs:  towerSpecs,
+		JSONHandler: jsonHandler, // Store the handler
 	}
 
 	// Assign towers to players
@@ -157,6 +176,9 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 		// Remove Queen from hand after use
 		actingPlayer.Troops = append(actingPlayer.Troops[:troopIndex], actingPlayer.Troops[troopIndex+1:]...)
 
+		// Replenish one troop (even for Queen, as she is consumed)
+		gs.replenishTroopForPlayer(actingPlayer)
+
 		// End turn (even if continue attacking was true)
 		if !gs.GameState.CanContinueAttacking {
 			gs.GameState.SwitchTurn()
@@ -192,39 +214,140 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 
 	// Check if tower is destroyed
 	towerDestroyed := false
+	var destructionMessage string // To store the base destruction message
 	if targetTower.CurrentHP <= 0 {
 		targetTower.CurrentHP = 0
 		targetTower.Destroyed = true
 		towerDestroyed = true
 		gs.GameState.LastDestroyedTowerID = targetTowerID
+
+		// Award EXP for destroying the tower
+		actingPlayer.CurrentEXP += targetTower.Spec.DestroyEXP
+		levelUpMessage := gs.HandleExperienceAndLevelUp(actingPlayer)
+
+		destructionMessage = fmt.Sprintf("%s's troop %s dealt %d damage to %s and destroyed it!",
+			actingPlayer.Username, troopName, damage, targetTowerID)
+		if levelUpMessage != "" {
+			destructionMessage += " " + levelUpMessage
+		}
 	}
 
 	// Remove the troop from the player's hand after use
 	actingPlayer.Troops = append(actingPlayer.Troops[:troopIndex], actingPlayer.Troops[troopIndex+1:]...)
 
+	// Replenish one troop
+	gs.replenishTroopForPlayer(actingPlayer)
+
 	// Check win condition
 	if targetTower == opponentPlayer.KingTower && targetTower.Destroyed {
 		gs.GameState.SetWinner(actingPlayer.Username)
-		return fmt.Sprintf("%s's troop %s dealt %d damage to %s and destroyed it! %s wins the game!",
-			actingPlayer.Username, troopName, damage, targetTowerID, actingPlayer.Username), true
+		// Award end-game EXP - we'll do this in handleGameOver or similar later
+		return fmt.Sprintf("%s %s wins the game!", destructionMessage, actingPlayer.Username), true
 	}
 
 	// If a tower was destroyed, the player can continue attacking
 	if towerDestroyed {
 		gs.GameState.CanContinueAttacking = true
-		return fmt.Sprintf("%s's troop %s dealt %d damage to %s and destroyed it! You can attack again.",
-			actingPlayer.Username, troopName, damage, targetTowerID), true
+		return fmt.Sprintf("%s You can attack again.", destructionMessage), true
 	}
 
 	// If not continuing attack, switch turn
 	if !gs.GameState.CanContinueAttacking {
 		gs.GameState.SwitchTurn()
 	} else {
+		// Player was continuing an attack, but didn't destroy another tower.
+		// Their bonus turn ends now.
 		gs.GameState.CanContinueAttacking = false
+		gs.GameState.SwitchTurn()
 	}
 
 	return fmt.Sprintf("%s's troop %s dealt %d damage to %s (HP remaining: %d).",
 		actingPlayer.Username, troopName, damage, targetTowerID, targetTower.CurrentHP), true
+}
+
+// HandleExperienceAndLevelUp checks for player level up and updates stats accordingly.
+// It returns a message if the player leveled up, otherwise an empty string.
+func (gs *GameSession) HandleExperienceAndLevelUp(player *Player) string {
+	leveledUp := false
+	levelUpMessage := ""
+	for player.CurrentEXP >= player.RequiredEXPForNextLevel {
+		player.Level++
+		player.CurrentEXP -= player.RequiredEXPForNextLevel
+		// It's good practice to ensure CurrentEXP doesn't become negative if it's exactly RequiredEXPForNextLevel
+		if player.CurrentEXP < 0 {
+			player.CurrentEXP = 0
+		}
+		player.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(player.Level) // Use shared util
+		leveledUp = true
+	}
+	if leveledUp {
+		levelUpMessage = fmt.Sprintf("%s leveled up to Level %d! Next level at %d EXP.",
+			player.Username, player.Level, player.RequiredEXPForNextLevel)
+		fmt.Println(levelUpMessage) // For server-side logging for now
+	}
+
+	// Always save player data after EXP change (level up or not)
+	if gs.JSONHandler != nil {
+		err := gs.JSONHandler.SavePlayerData(player.Username, player.CurrentEXP, player.Level)
+		if err != nil {
+			log.Printf("Error saving player data for %s after EXP update: %v", player.Username, err)
+		}
+	} else {
+		log.Printf("Warning: JSONHandler is nil in GameSession. Cannot save player data for %s.", player.Username)
+	}
+
+	return levelUpMessage
+}
+
+// replenishTroopForPlayer adds a new distinct troop to the player's hand
+func (gs *GameSession) replenishTroopForPlayer(player *Player) {
+	if len(gs.TroopSpecs) == 0 {
+		return // No troops defined to replenish from
+	}
+
+	// Create a map of troops currently in hand for quick lookup
+	handTroopNames := make(map[string]bool)
+	for _, troopInstance := range player.Troops {
+		handTroopNames[troopInstance.Spec.Name] = true
+	}
+
+	// Find available troop specs not currently in hand
+	availableToReplenish := make([]models.TroopSpec, 0)
+	for _, spec := range gs.TroopSpecs {
+		if !spec.IsSpecialOnly { // Typically replenish with regular troops
+			if !handTroopNames[spec.Name] {
+				availableToReplenish = append(availableToReplenish, spec)
+			}
+		}
+	}
+
+	// If all regular troops are in hand, or no regular troops are available to replenish,
+	// we might allow adding a duplicate or a special troop if desired.
+	// For now, if no distinct regular troop is available, do nothing to avoid duplicates.
+	if len(availableToReplenish) == 0 {
+		// Fallback: if no distinct regular troops, try adding any troop not in hand (including special)
+		// This part can be adjusted based on desired game mechanics for replenishment limits.
+		for _, spec := range gs.TroopSpecs {
+			if !handTroopNames[spec.Name] {
+				availableToReplenish = append(availableToReplenish, spec)
+			}
+		}
+		if len(availableToReplenish) == 0 {
+			// If still no troops (e.g., player has all defined troops), do nothing.
+			return
+		}
+	}
+
+	// Select a random troop from the available ones
+	randIndex := rand.Intn(len(availableToReplenish))
+	newTroopSpec := availableToReplenish[randIndex]
+
+	// Add the new troop to the player's hand
+	newTroopInstance := NewTroopInstance(&newTroopSpec, fmt.Sprintf("%s_troop_%d", player.Username, len(player.Troops)+1), player.Level)
+	player.Troops = append(player.Troops, newTroopInstance)
+
+	// It might be good to send a message to the client that a troop has been replenished.
+	// For now, the next GameStateUpdate will show the new troop.
 }
 
 // GetGameStateInfo returns a string with the current game state for console display

@@ -2,9 +2,9 @@
   {
     "Name": "King Tower",
     "Type": "KING",
-    "BaseHP": 2000,
+    "BaseHP": 1800,
     "BaseATK": 500,
-    "BaseDEF": 300,
+    "BaseDEF": 150,
     "CritChancePercent": 10,
     "DestroyEXP": 200
   },

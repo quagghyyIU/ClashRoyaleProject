@@ -84,7 +84,7 @@ func testSimpleTCR() {
 	}
 
 	// Create a new game session
-	gameSession := game.NewGameSession("PlayerA", "PlayerB", troopSpecs, towerSpecs)
+	gameSession := game.NewGameSession("PlayerA", "PlayerB", troopSpecs, towerSpecs, jsonHandler)
 
 	// Print initial game state
 	fmt.Println("\n=== Initial Game State ===")
