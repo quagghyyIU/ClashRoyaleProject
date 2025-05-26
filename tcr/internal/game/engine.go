@@ -17,9 +17,9 @@ type GameSession struct {
 // NewGameSession creates a new game session with two players
 func NewGameSession(playerAName, playerBName string, troopSpecs []models.TroopSpec, towerSpecs []models.TowerSpec) *GameSession {
 	// Initialize random seed
-	rand.Seed(time.Now().UnixNano())
+	rand.NewSource(time.Now().UnixNano())
 
-	// Create players
+	// Create two players
 	playerA := NewPlayer(playerAName)
 	playerB := NewPlayer(playerBName)
 
