@@ -123,13 +123,21 @@ func testSimpleTCR() {
 				fmt.Println("\n=== Game State ===")
 				fmt.Println(gameSession.GetGameStateInfo())
 			}
+		case "s", "skip":
+			resultMsg, success := gameSession.SkipTurn(gameSession.GameState.CurrentTurn)
+			fmt.Println(resultMsg)
+			if success {
+				fmt.Println("\n=== Game State ===")
+				fmt.Println(gameSession.GetGameStateInfo())
+			}
 		case "q", "quit":
 			return
 		case "h", "help":
 			fmt.Println("Commands:")
 			fmt.Println("  d <troop_name> <target_tower_id> - Deploy troop to attack a target tower")
-			fmt.Println("  q - Quit the game")
-			fmt.Println("  h - Show this help")
+			fmt.Println("  s                                - Skip your turn and gain bonus mana")
+			fmt.Println("  q                                - Quit the game")
+			fmt.Println("  h                                - Show this help")
 		default:
 			fmt.Println("Unknown command. Type 'h' for help.")
 		}

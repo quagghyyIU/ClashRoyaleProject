@@ -34,7 +34,21 @@ Sent by client to log in to the server.
 {
   "type": "LOGIN_REQUEST",
   "payload": {
-    "username": "PlayerName"
+    "username": "PlayerName",
+    "password": "PlayerPassword"
+  }
+}
+```
+
+#### REGISTER_REQUEST
+Sent by client to register a new account on the server.
+
+```json
+{
+  "type": "REGISTER_REQUEST",
+  "payload": {
+    "username": "NewPlayerName",
+    "password": "NewPlayerPassword"
   }
 }
 ```
@@ -46,28 +60,39 @@ Sent by server in response to a login request.
 {
   "type": "LOGIN_RESPONSE",
   "payload": {
-    "success": true/false,
-    "message": "Success or error message",
-    "playerId": "PlayerID" // Only included if success is true
+    "success": true, // or false
+    "message": "Successfully logged in as PlayerName",
+    "playerId": "PlayerName" // Included if success is true
+  }
+}
+```
+
+#### REGISTER_RESPONSE
+Sent by server in response to a registration request.
+
+```json
+{
+  "type": "REGISTER_RESPONSE",
+  "payload": {
+    "success": true, // or false
+    "message": "Successfully registered PlayerName"
   }
 }
 ```
 
 #### ERROR_NOTIFICATION
-Sent by server to notify client of an error.
+Sent by server to notify client of an error (e.g., login failure, invalid command, etc.).
 
 ```json
 {
   "type": "ERROR_NOTIFICATION",
   "payload": {
-    "errorMessage": "Description of the error"
+    "errorMessage": "Description of the error (e.g., Invalid password)"
   }
 }
 ```
 
-### Game Management (Phase 3)
-
-These messages will be implemented in Phase 3 of the project:
+### Game Management
 
 #### DEPLOY_TROOP_COMMAND
 Sent by client to deploy a troop.
@@ -76,66 +101,69 @@ Sent by client to deploy a troop.
 {
   "type": "DEPLOY_TROOP_COMMAND",
   "payload": {
-    "troopName": "TroopName",
-    "targetTowerID": "OpponentUsername_TOWERTYPE"
+    "troopName": "Knight",
+    "targetTowerID": "OpponentUsername_GUARD1"
   }
+}
+```
+
+#### SKIP_TURN_COMMAND
+Sent by client to skip their current turn.
+
+```json
+{
+  "type": "SKIP_TURN_COMMAND",
+  "payload": {} // No payload needed
 }
 ```
 
 #### GAME_START_NOTIFICATION
 Sent by server to notify clients that a game is starting.
+Payload includes opponent's username and the initial state for the receiving player.
 
 ```json
 {
   "type": "GAME_START_NOTIFICATION",
   "payload": {
-    "opponentUsername": "OpponentName",
-    "yourPlayerInfo": {
-      // Player info
-    },
-    "initialGameState": {
-      // Game state
-    },
-    "gameMode": "SIMPLE" // or "ENHANCED"
+    "opponentUsername": "OpponentPlayer",
+    "yourPlayerInfo": { /* PlayerState object for the recipient */ },
+    "gameMode": "SIMPLE"
   }
 }
 ```
 
 #### GAME_STATE_UPDATE
 Sent by server to update clients on the current game state.
+Includes the full state of both players, the current turn, and a log of the last action.
 
 ```json
 {
   "type": "GAME_STATE_UPDATE",
   "payload": {
-    "playerA": {
-      // Player A state
-    },
-    "playerB": {
-      // Player B state
-    },
+    "playerA": { /* PlayerState object for player A */ },
+    "playerB": { /* PlayerState object for player B */ },
     "currentTurn": "PlayerName",
-    "lastActionLog": "Action description" // Optional
+    "lastActionLog": "PlayerName deployed Knight..."
   }
 }
 ```
 
 #### ACTION_RESULT
-Sent by server to notify client of the result of their action.
+Sent by server to notify the acting client of the result of their action (e.g., troop deployment, skip).
 
 ```json
 {
   "type": "ACTION_RESULT",
   "payload": {
-    "success": true/false,
-    "action": "Action description",
-    "message": "Result description"
+    "success": true, // or false
+    "action": "Deploy Knight",
+    "message": "Knight dealt 100 damage..."
   }
 }
 ```
 
 #### TURN_NOTIFICATION
-Sent by server to notify client that it's their turn.
+Sent by server to notify the client whose turn it is now.
 
 ```json
 {
@@ -153,8 +181,11 @@ Sent by server to notify clients that the game is over.
 {
   "type": "GAME_OVER_NOTIFICATION",
   "payload": {
-    "winnerUsername": "PlayerName",
-    "reason": "Reason for game end"
+    "winnerUsername": "PlayerName", // Can be empty or "DRAW"
+    "reason": "King Tower destroyed" // or "Player disconnected"
   }
 }
 ```
+
+<!-- Note: PlayerState and TowerState object structures are detailed in models.go -->
+<!-- It's implied they are nested within payloads like GAME_START_NOTIFICATION and GAME_STATE_UPDATE -->

@@ -1,5 +1,7 @@
 package game
 
+import "tcr/internal/shared" // Added import for shared constants
+
 // GameState holds all information for a single game
 type GameState struct {
 	// Pointers to both players
@@ -16,6 +18,9 @@ type GameState struct {
 	// Track the last target destroyed (for the "Continue Attacking" rule)
 	LastDestroyedTowerID string
 	CanContinueAttacking bool
+
+	// Log of the last action taken for client display
+	LastActionLog string
 }
 
 // NewGameState creates a new game state with the given players
@@ -28,6 +33,7 @@ func NewGameState(playerA, playerB *Player) *GameState {
 		Winner:               "",
 		LastDestroyedTowerID: "",
 		CanContinueAttacking: false,
+		LastActionLog:        "",
 	}
 }
 
@@ -47,13 +53,26 @@ func (gs *GameState) GetOpponentPlayer() *Player {
 	return gs.PlayerA
 }
 
-// SwitchTurn changes the turn to the other player
+// SwitchTurn changes the turn to the other player and regenerates mana for the new current player.
 func (gs *GameState) SwitchTurn() {
+	// Determine the player whose turn it will become
+	var nextPlayer *Player
 	if gs.CurrentTurn == gs.PlayerA.Username {
 		gs.CurrentTurn = gs.PlayerB.Username
+		nextPlayer = gs.PlayerB
 	} else {
 		gs.CurrentTurn = gs.PlayerA.Username
+		nextPlayer = gs.PlayerA
 	}
+
+	// Regenerate mana for the player whose turn it now is
+	if nextPlayer != nil {
+		nextPlayer.CurrentMana += shared.ManaRegenRate
+		if nextPlayer.CurrentMana > shared.MaxMana {
+			nextPlayer.CurrentMana = shared.MaxMana
+		}
+	}
+
 	gs.CanContinueAttacking = false
 }
 

@@ -18,6 +18,7 @@ type GameClient struct {
 	MyTurn       bool
 	OpponentName string
 	GameMode     string
+	GameOver     bool
 	MessageCh    chan models.GenericMessage
 	DisconnectCh chan error
 }
@@ -30,6 +31,7 @@ func NewClient(addr string) *GameClient {
 		LoggedIn:     false,
 		InGame:       false,
 		MyTurn:       false,
+		GameOver:     false,
 		MessageCh:    make(chan models.GenericMessage, 10),
 		DisconnectCh: make(chan error, 1),
 	}
@@ -126,6 +128,22 @@ func (c *GameClient) DeployTroop(troopName, targetTowerID string) error {
 	}
 
 	// Send deploy troop command
+	return WriteMessage(c.conn, message)
+}
+
+// SendSkipTurnCommand sends a skip turn command to the server
+func (c *GameClient) SendSkipTurnCommand() error {
+	if !c.Connected || !c.InGame {
+		return fmt.Errorf("not in game")
+	}
+
+	// No payload needed for skip, just the message type
+	message := models.GenericMessage{
+		Type:    models.MsgTypeSkipTurnCommand, // New message type
+		Payload: nil,                           // No specific payload needed for skip
+	}
+
+	// Send skip turn command
 	return WriteMessage(c.conn, message)
 }
 
@@ -247,4 +265,5 @@ func (c *GameClient) handleGameOverNotification(payload interface{}) {
 	// Reset game state
 	c.InGame = false
 	c.MyTurn = false
+	c.GameOver = true
 }

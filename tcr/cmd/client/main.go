@@ -35,6 +35,30 @@ var (
 
 func init() {
 	// Initialize with empty data to avoid nil pointer errors
+	myPlayerState = models.PlayerState{
+		Username:                "You",
+		KingTower:               models.TowerState{Type: "KING"},
+		GuardTower1:             models.TowerState{Type: "GUARD1"},
+		GuardTower2:             models.TowerState{Type: "GUARD2"},
+		Troops:                  make([]models.TroopState, 0),
+		Level:                   1,
+		CurrentEXP:              0,
+		RequiredEXPForNextLevel: 100,
+		CurrentMana:             0,
+		MaxMana:                 10,
+	}
+	opponentState = models.PlayerState{
+		Username:                "Opponent",
+		KingTower:               models.TowerState{Type: "KING"},
+		GuardTower1:             models.TowerState{Type: "GUARD1"},
+		GuardTower2:             models.TowerState{Type: "GUARD2"},
+		Troops:                  make([]models.TroopState, 0),
+		Level:                   1,
+		CurrentEXP:              0,
+		RequiredEXPForNextLevel: 100,
+		CurrentMana:             0,
+		MaxMana:                 10,
+	}
 	myKingTower = models.TowerState{
 		Type:      "KING",
 		CurrentHP: 0,
@@ -260,8 +284,8 @@ func main() {
 		// --- In Game ---
 		// Refresh hand/target info if it's our turn, right before prompting
 		if client.MyTurn {
-			displayPlayerHandAndTargetInfo()
-			fmt.Print("Your turn - Enter command (d <troop_name>, status, help, quit): ")
+			// displayPlayerHandAndTargetInfo(&myPlayerState) // Moved to handleTurnNotification or specific command handlers
+			fmt.Printf("Your turn - Enter command (d <troop_name>, status, help, quit): ")
 		} else {
 			fmt.Print("(Waiting for opponent... Type status, help, or quit): ")
 		}
@@ -273,7 +297,7 @@ func main() {
 		}
 
 		if input == "status" {
-			displayGameStatus(client)
+			displayGameStatus(client, &myPlayerState, &opponentState, currentTurn, opponentUsername)
 			// displayPlayerHandAndTargetInfo() // displayGameStatus might call this if it's our turn
 			continue
 		}
@@ -316,12 +340,12 @@ func main() {
 			} else {
 				// Auto-select target based on game rules
 				// Guard Tower 1 must be destroyed before targeting Guard Tower 2 or King
-				if !enemyGuardTower1.Destroyed {
-					targetTowerID = enemyGuardTower1.ID
-				} else if !enemyGuardTower2.Destroyed {
-					targetTowerID = enemyGuardTower2.ID
-				} else if !enemyKingTower.Destroyed {
-					targetTowerID = enemyKingTower.ID
+				if !opponentState.GuardTower1.Destroyed {
+					targetTowerID = opponentState.GuardTower1.ID
+				} else if !opponentState.GuardTower2.Destroyed {
+					targetTowerID = opponentState.GuardTower2.ID
+				} else if !opponentState.KingTower.Destroyed {
+					targetTowerID = opponentState.KingTower.ID
 				} else {
 					// All towers destroyed? This shouldn't happen as game should be over
 					fmt.Println("Error: Can't find a valid target tower.")
@@ -331,9 +355,9 @@ func main() {
 				// Make sure we have a valid ID
 				if targetTowerID == "" {
 					// Construct a plausible ID if we somehow don't have it from server
-					if !enemyGuardTower1.Destroyed {
+					if !opponentState.GuardTower1.Destroyed {
 						targetTowerID = opponentUsername + "_GUARD1"
-					} else if !enemyGuardTower2.Destroyed {
+					} else if !opponentState.GuardTower2.Destroyed {
 						targetTowerID = opponentUsername + "_GUARD2"
 					} else {
 						targetTowerID = opponentUsername + "_KING"
@@ -360,6 +384,13 @@ func main() {
 				fmt.Printf("Error sending deploy command: %v\n", err)
 			}
 			continue // Wait for server updates before re-prompting
+		case "skip":
+			fmt.Println("\n>>> SKIPPING TURN <<<\n")
+			err := client.SendSkipTurnCommand() // We'll need to define this method in network/client.go
+			if err != nil {
+				fmt.Printf("Error sending skip command: %v\n", err)
+			}
+			continue // Wait for server updates
 		default:
 			fmt.Println("Unknown command. Type 'help' for list of commands.")
 		}
@@ -500,233 +531,225 @@ func handleGameStartNotification(c *network.GameClient, payload interface{}) {
 	opponentUsername, _ = gameStartMap["opponentUsername"].(string)
 	gameMode, _ = gameStartMap["gameMode"].(string)
 
-	// Extract player info
-	playerInfoMap, ok := gameStartMap["yourPlayerInfo"].(map[string]interface{})
-	if ok {
-		// Store relevant player info
-		username, _ := playerInfoMap["username"].(string)
+	// Parse your player info
+	if pInfo, ok := gameStartMap["yourPlayerInfo"].(map[string]interface{}); ok {
+		myPlayerState = parsePlayerState(pInfo, "You")
+	} else {
+		fmt.Println("Error parsing yourPlayerInfo from GameStartNotification")
+	}
 
-		// Get towers
-		if kingTower, ok := playerInfoMap["kingTower"].(map[string]interface{}); ok {
-			myKingTower = parseTowerState(kingTower)
-		}
-		if guardTower1, ok := playerInfoMap["guardTower1"].(map[string]interface{}); ok {
-			myGuardTower1 = parseTowerState(guardTower1)
-		}
-		if guardTower2, ok := playerInfoMap["guardTower2"].(map[string]interface{}); ok {
-			myGuardTower2 = parseTowerState(guardTower2)
-		}
+	fmt.Printf("You are playing against: %s\n", opponentUsername)
+	fmt.Printf("Game Mode: %s\n", gameMode)
+	// Initial game status display will be handled by the first GameStateUpdate
+	// displayGameStatus(c, &myPlayerState, &opponentState, currentTurn, opponentUsername)
+}
 
-		// Get troops
-		if troops, ok := playerInfoMap["troops"].([]interface{}); ok {
-			myTroops = make([]models.TroopState, 0, len(troops))
-			for _, t := range troops {
-				if troopMap, ok := t.(map[string]interface{}); ok {
-					myTroops = append(myTroops, parseTroopState(troopMap))
-				}
+// parsePlayerState converts a map to models.PlayerState
+func parsePlayerState(playerMap map[string]interface{}, defaultUsername string) models.PlayerState {
+	ps := models.PlayerState{Username: defaultUsername} // Default username if not in map
+
+	if username, ok := playerMap["username"].(string); ok {
+		ps.Username = username
+	}
+	if kt, ok := playerMap["kingTower"].(map[string]interface{}); ok {
+		ps.KingTower = parseTowerState(kt)
+	}
+	if gt1, ok := playerMap["guardTower1"].(map[string]interface{}); ok {
+		ps.GuardTower1 = parseTowerState(gt1)
+	}
+	if gt2, ok := playerMap["guardTower2"].(map[string]interface{}); ok {
+		ps.GuardTower2 = parseTowerState(gt2)
+	}
+	if troopsList, ok := playerMap["troops"].([]interface{}); ok {
+		ps.Troops = make([]models.TroopState, len(troopsList))
+		for i, t := range troopsList {
+			if troopMap, ok := t.(map[string]interface{}); ok {
+				ps.Troops[i] = parseTroopState(troopMap)
 			}
 		}
-
-		fmt.Printf("\n===============================\n")
-		fmt.Printf("🎮 GAME STARTED! 🎮\n")
-		fmt.Printf("===============================\n")
-		fmt.Printf("Game Mode: %s\n", gameMode)
-		fmt.Printf("You: %s\n", username)
-		fmt.Printf("Opponent: %s\n", opponentUsername)
-
-		// Display initial state
-		fmt.Println("\n=== Your Towers ===")
-		fmt.Printf("King Tower: HP %d/%d, ATK %d, DEF %d\n",
-			myKingTower.CurrentHP, myKingTower.MaxHP, myKingTower.Attack, myKingTower.Defense)
-		fmt.Printf("Guard Tower 1: HP %d/%d, ATK %d, DEF %d\n",
-			myGuardTower1.CurrentHP, myGuardTower1.MaxHP, myGuardTower1.Attack, myGuardTower1.Defense)
-		fmt.Printf("Guard Tower 2: HP %d/%d, ATK %d, DEF %d\n",
-			myGuardTower2.CurrentHP, myGuardTower2.MaxHP, myGuardTower2.Attack, myGuardTower2.Defense)
-
-		fmt.Println("\n=== Your Available Troops ===")
-		for _, troop := range myTroops {
-			fmt.Printf("%s: HP %d, ATK %d, DEF %d\n",
-				troop.Name, troop.HP, troop.Attack, troop.Defense)
-		}
-
-		fmt.Println("\nWaiting for the first turn...")
-		fmt.Println("Type 'help' during the game to see available commands.")
 	}
+	// Parse new fields for Enhanced TCR
+	if level, ok := playerMap["level"].(float64); ok { // JSON numbers are often float64
+		ps.Level = int(level)
+	}
+	if currentEXP, ok := playerMap["currentEXP"].(float64); ok {
+		ps.CurrentEXP = int(currentEXP)
+	}
+	if requiredEXP, ok := playerMap["requiredEXPForNextLevel"].(float64); ok {
+		ps.RequiredEXPForNextLevel = int(requiredEXP)
+	}
+	if currentMana, ok := playerMap["currentMana"].(float64); ok {
+		ps.CurrentMana = int(currentMana)
+	}
+	if maxMana, ok := playerMap["maxMana"].(float64); ok {
+		ps.MaxMana = int(maxMana)
+	}
+
+	return ps
 }
 
-// parseTowerState parses a tower state from a map
 func parseTowerState(towerMap map[string]interface{}) models.TowerState {
-	id, _ := towerMap["id"].(string)
-	towerType, _ := towerMap["type"].(string)
-	currentHP, _ := towerMap["currentHP"].(float64)
-	maxHP, _ := towerMap["maxHP"].(float64)
-	attack, _ := towerMap["attack"].(float64)
-	defense, _ := towerMap["defense"].(float64)
-	destroyed, _ := towerMap["destroyed"].(bool)
-
-	return models.TowerState{
-		ID:        id,
-		Type:      towerType,
-		CurrentHP: int(currentHP),
-		MaxHP:     int(maxHP),
-		Attack:    int(attack),
-		Defense:   int(defense),
-		Destroyed: destroyed,
+	ts := models.TowerState{}
+	if id, ok := towerMap["id"].(string); ok {
+		ts.ID = id
 	}
+	if typ, ok := towerMap["type"].(string); ok {
+		ts.Type = typ
+	}
+	if hp, ok := towerMap["currentHP"].(float64); ok { // JSON numbers are float64
+		ts.CurrentHP = int(hp)
+	}
+	if maxHp, ok := towerMap["maxHP"].(float64); ok {
+		ts.MaxHP = int(maxHp)
+	}
+	if atk, ok := towerMap["attack"].(float64); ok {
+		ts.Attack = int(atk)
+	}
+	if def, ok := towerMap["defense"].(float64); ok {
+		ts.Defense = int(def)
+	}
+	if destroyed, ok := towerMap["destroyed"].(bool); ok {
+		ts.Destroyed = destroyed
+	}
+	return ts
 }
 
-// parseTroopState parses a troop state from a map
 func parseTroopState(troopMap map[string]interface{}) models.TroopState {
-	name, _ := troopMap["name"].(string)
-	hp, _ := troopMap["hp"].(float64)
-	attack, _ := troopMap["attack"].(float64)
-	defense, _ := troopMap["defense"].(float64)
-
-	return models.TroopState{
-		Name:    name,
-		HP:      int(hp),
-		Attack:  int(attack),
-		Defense: int(defense),
+	trs := models.TroopState{}
+	if name, ok := troopMap["name"].(string); ok {
+		trs.Name = name
 	}
+	if hp, ok := troopMap["hp"].(float64); ok {
+		trs.HP = int(hp)
+	}
+	if atk, ok := troopMap["attack"].(float64); ok {
+		trs.Attack = int(atk)
+	}
+	if def, ok := troopMap["defense"].(float64); ok {
+		trs.Defense = int(def)
+	}
+	// Attempt to parse ManaCost - this depends on server sending it in TroopState
+	if manaCost, ok := troopMap["manaCost"].(float64); ok {
+		trs.ManaCost = int(manaCost)
+	}
+	return trs
 }
 
 // handleGameStateUpdate handles a game state update from the server
 func handleGameStateUpdate(c *network.GameClient, payload interface{}) {
-	updateMap, ok := payload.(map[string]interface{})
+	gameStateMap, ok := payload.(map[string]interface{})
 	if !ok {
 		fmt.Println("Error parsing game state update")
 		return
 	}
 
-	// Update current turn
-	if turn, ok := updateMap["currentTurn"].(string); ok {
-		currentTurn = turn
-	}
-
-	// Update last action log
-	if lastActionLog, ok := updateMap["lastActionLog"].(string); ok {
-		lastActionLog = lastActionLog
-	}
-
-	// Extract player states
-	// Try to find our player and opponent in playerA or playerB
-	playerA, hasPlayerA := updateMap["playerA"].(map[string]interface{})
-	playerB, hasPlayerB := updateMap["playerB"].(map[string]interface{})
-
-	if hasPlayerA && hasPlayerB {
-		playerAUsername, _ := playerA["username"].(string)
-		// Determine which is our player and which is opponent
-		var myPlayerMap, enemyPlayerMap map[string]interface{}
-		if playerAUsername == c.Username {
-			myPlayerMap = playerA
-			enemyPlayerMap = playerB
+	// Update current turn and last action log
+	if ct, ok := gameStateMap["currentTurn"].(string); ok {
+		currentTurn = ct
+		if currentTurn == myPlayerState.Username { // Compare with updated myPlayerState.Username
+			c.MyTurn = true
 		} else {
-			myPlayerMap = playerB
-			enemyPlayerMap = playerA
+			c.MyTurn = false
 		}
+	}
+	if lal, ok := gameStateMap["lastActionLog"].(string); ok {
+		lastActionLog = lal
+		fmt.Printf("\n--- Server Log: %s ---\n", lastActionLog)
+	}
 
-		// Update my player state
-		if kingTower, ok := myPlayerMap["kingTower"].(map[string]interface{}); ok {
-			myKingTower = parseTowerState(kingTower)
+	// Update player states
+	if pA, ok := gameStateMap["playerA"].(map[string]interface{}); ok {
+		// Determine if playerA is me or opponent based on Username
+		usernameA, _ := pA["username"].(string)
+		if usernameA == myPlayerState.Username {
+			myPlayerState = parsePlayerState(pA, myPlayerState.Username)
+		} else {
+			opponentState = parsePlayerState(pA, opponentUsername)
 		}
-		if guardTower1, ok := myPlayerMap["guardTower1"].(map[string]interface{}); ok {
-			myGuardTower1 = parseTowerState(guardTower1)
-		}
-		if guardTower2, ok := myPlayerMap["guardTower2"].(map[string]interface{}); ok {
-			myGuardTower2 = parseTowerState(guardTower2)
-		}
-
-		// Update enemy player state
-		if kingTower, ok := enemyPlayerMap["kingTower"].(map[string]interface{}); ok {
-			enemyKingTower = parseTowerState(kingTower)
-		}
-		if guardTower1, ok := enemyPlayerMap["guardTower1"].(map[string]interface{}); ok {
-			enemyGuardTower1 = parseTowerState(guardTower1)
-		}
-		if guardTower2, ok := enemyPlayerMap["guardTower2"].(map[string]interface{}); ok {
-			enemyGuardTower2 = parseTowerState(guardTower2)
-		}
-
-		// Update troops
-		if troops, ok := myPlayerMap["troops"].([]interface{}); ok {
-			myTroops = make([]models.TroopState, 0, len(troops))
-			for _, t := range troops {
-				if troopMap, ok := t.(map[string]interface{}); ok {
-					myTroops = append(myTroops, parseTroopState(troopMap))
-				}
-			}
+	}
+	if pB, ok := gameStateMap["playerB"].(map[string]interface{}); ok {
+		usernameB, _ := pB["username"].(string)
+		if usernameB == myPlayerState.Username {
+			myPlayerState = parsePlayerState(pB, myPlayerState.Username)
+		} else {
+			opponentState = parsePlayerState(pB, opponentUsername)
 		}
 	}
 
-	// Log the update
-	if lastActionLog != "" {
-		fmt.Println("==============================================")
-		fmt.Printf("⚡ ACTION: %s ⚡\n", lastActionLog)
-		fmt.Println("==============================================")
-	}
+	// Display updated game status
+	fmt.Println("\n--- Game State Updated ---")
+	displayGameStatus(c, &myPlayerState, &opponentState, currentTurn, opponentUsername)
 
-	// Display game status if it's not our turn (to see opponent's move results)
-	if currentTurn != c.Username {
-		displayGameStatus(c)
+	// If it's my turn now, the TurnNotification handler will display hand and prompt.
+	// If it's not my turn, or game is over, display appropriate message.
+	if !c.MyTurn && !c.GameOver {
+		fmt.Print("(Waiting for opponent... Type status, help, or quit): ")
+	} else if c.GameOver {
+		// Game over message is handled by handleGameOverNotification
+		// We might want a generic prompt here or nothing if quit is the only option
+		fmt.Print("> ") // Generic prompt after game over
 	}
+	// The prompt for action when it is our turn is now handled by handleTurnNotification
+	// or if the user types a command that doesn't end their turn (like a failed deploy).
 }
 
 // handleTurnNotification handles a turn notification from the server
 func handleTurnNotification(client *network.GameClient, payload interface{}) {
-	// Parse turn notification payload
-	turnMap, ok := payload.(map[string]interface{})
+	turnNotifMap, ok := payload.(map[string]interface{})
 	if !ok {
 		fmt.Println("Error parsing turn notification")
 		return
 	}
 
-	// Extract current turn username
-	username, _ := turnMap["currentTurnUsername"].(string)
-	currentTurn = username // Correct: Update the package-level currentTurn variable
-
-	fmt.Println("\n==============================================")
-	fmt.Printf("🔔 It's %s's turn! 🔔\n", username)
-	fmt.Println("==============================================")
-
-	if username == client.Username {
-		client.MyTurn = true             // Set MyTurn flag
-		displayPlayerHandAndTargetInfo() // Display hand immediately when it becomes our turn
-	} else {
-		client.MyTurn = false
+	if ctUser, ok := turnNotifMap["currentTurnUsername"].(string); ok {
+		currentTurn = ctUser // Update currentTurn
+		fmt.Printf("\n--- It's now %s's turn. ---\n", currentTurn)
+		if currentTurn == myPlayerState.Username { // Compare with updated myPlayerState.Username
+			client.MyTurn = true
+			// Display hand and prompt only if game is not over
+			if !client.GameOver {
+				displayPlayerHandAndTargetInfo(&myPlayerState)
+				fmt.Print("Your turn - Enter command (d <troop_name>, status, help, quit): ")
+			}
+		} else {
+			client.MyTurn = false
+			if !client.GameOver {
+				fmt.Print("(Waiting for opponent... Type status, help, or quit): ")
+			}
+		}
 	}
 }
 
-// displayPlayerHandAndTargetInfo displays the player's current hand and auto-target
-func displayPlayerHandAndTargetInfo() {
-	fmt.Println("\n🖐️ === Your Available Troops === 🖐️")
-	hasQueen := false
-	for _, troop := range myTroops {
-		fmt.Printf("%s: HP %d, ATK %d, DEF %d\n",
-			troop.Name, troop.HP, troop.Attack, troop.Defense)
-		if troop.Name == "Queen" {
-			hasQueen = true
+func displayPlayerHandAndTargetInfo(player *models.PlayerState) {
+	fmt.Printf("\n--- Mana: %d/%d ---\n", player.CurrentMana, player.MaxMana)
+	fmt.Println("--- Your Hand ---")
+	if len(player.Troops) == 0 {
+		fmt.Println("  Your hand is empty!")
+	} else {
+		for _, troop := range player.Troops {
+			// Attempt to display ManaCost - requires server to send it in TroopState
+			if troop.ManaCost > 0 {
+				fmt.Printf("  - %s (ATK:%d DEF:%d HP:%d Mana:%d)\n", troop.Name, troop.Attack, troop.Defense, troop.HP, troop.ManaCost)
+			} else {
+				fmt.Printf("  - %s (ATK:%d DEF:%d HP:%d)\n", troop.Name, troop.Attack, troop.Defense, troop.HP)
+			}
 		}
 	}
+	fmt.Println("-----------------")
 
-	if hasQueen {
-		fmt.Println("\nNOTE: The Queen will heal your lowest HP tower when deployed")
-		// Display player's own tower HPs for context if Queen is available
-		var kingStatus, guard1Status, guard2Status string
-		if myKingTower.Destroyed {
-			kingStatus = " (DESTROYED)"
-		}
-		if myGuardTower1.Destroyed {
-			guard1Status = " (DESTROYED)"
-		}
-		if myGuardTower2.Destroyed {
-			guard2Status = " (DESTROYED)"
-		}
-
-		fmt.Printf("Your tower HPs: King=%d/%d%s, Guard1=%d/%d%s, Guard2=%d/%d%s\n",
-			myKingTower.CurrentHP, myKingTower.MaxHP, kingStatus,
-			myGuardTower1.CurrentHP, myGuardTower1.MaxHP, guard1Status,
-			myGuardTower2.CurrentHP, myGuardTower2.MaxHP, guard2Status)
+	// Display target info (simplified, relies on auto-targeting logic in main loop)
+	// This could be enhanced to show specific target details based on opponentState
+	fmt.Println("--- Target Info ---")
+	if !opponentState.GuardTower1.Destroyed {
+		fmt.Printf("  Next auto-target: Opponent's Guard Tower 1 (ID: %s)\n", opponentState.GuardTower1.ID)
+	} else if !opponentState.GuardTower2.Destroyed {
+		fmt.Printf("  Next auto-target: Opponent's Guard Tower 2 (ID: %s)\n", opponentState.GuardTower2.ID)
+	} else if !opponentState.KingTower.Destroyed {
+		fmt.Printf("  Next auto-target: Opponent's King Tower (ID: %s)\n", opponentState.KingTower.ID)
+	} else {
+		fmt.Println("  All opponent towers destroyed or game is over.")
 	}
+	fmt.Println("-------------------")
 }
 
 // handleActionResult handles an action result from the server
@@ -758,56 +781,76 @@ func handleActionResult(client *network.GameClient, payload interface{}) {
 
 // handleGameOverNotification handles a game over notification from the server
 func handleGameOverNotification(payload interface{}) {
-	// Parse game over notification payload
-	overMap, ok := payload.(map[string]interface{})
+	gameOverMap, ok := payload.(map[string]interface{})
 	if !ok {
 		fmt.Println("Error parsing game over notification")
 		return
 	}
+	winner, _ := gameOverMap["winnerUsername"].(string)
+	reason, _ := gameOverMap["reason"].(string)
 
-	// Extract winner and reason
-	winner, _ := overMap["winnerUsername"].(string)
-	reason, _ := overMap["reason"].(string)
-
-	fmt.Printf("\n=== GAME OVER ===\n")
-	fmt.Printf("Winner: %s\n", winner)
+	fmt.Println("\n==============================================")
+	fmt.Println("GAME OVER!")
+	if winner != "" && winner != "DRAW" {
+		fmt.Printf("Winner: %s\n", winner)
+	} else if winner == "DRAW" {
+		fmt.Println("Result: It's a DRAW!")
+	}
 	fmt.Printf("Reason: %s\n", reason)
-	fmt.Println("Starting a new game when another player connects...")
-	// client.InGame = false // This should be handled by the main loop or a specific disconnect message
-	// If a global client variable exists and is intended here, it needs to be used consistently.
-	// For now, assuming the `client.InGame` was a local var or a field of a passed-in client struct.
-	// If `client` is a global var, it should be `client.InGame = false`
+	fmt.Println("==============================================")
+	fmt.Println("Thank you for playing! You can type 'quit' to exit.")
+	// Set a flag to stop prompting for turns or actions.
+	// This should be handled by the main loop checking client.Connected and client.GameOver (if we add such a flag)
+	// For now, client.MyTurn will be false if game over notification is processed after a turn notification.
+	// A more robust solution is a specific client.GameOver flag.
 }
 
 // displayGameStatus displays the current game status in a more readable format
-func displayGameStatus(c *network.GameClient) {
-	fmt.Println("----------------------------------------------")
-	fmt.Printf("👑 Your King Tower (%s): HP %d/%d, ATK %d, DEF %d %s\n",
-		myKingTower.ID, myKingTower.CurrentHP, myKingTower.MaxHP, myKingTower.Attack, myKingTower.Defense,
-		formatDestroyedStatus(myKingTower.Destroyed))
-	fmt.Printf("🛡️ Your Guard Tower 1 (%s): HP %d/%d, ATK %d, DEF %d %s\n",
-		myGuardTower1.ID, myGuardTower1.CurrentHP, myGuardTower1.MaxHP, myGuardTower1.Attack, myGuardTower1.Defense,
-		formatDestroyedStatus(myGuardTower1.Destroyed))
-	fmt.Printf("🛡️ Your Guard Tower 2 (%s): HP %d/%d, ATK %d, DEF %d %s\n",
-		myGuardTower2.ID, myGuardTower2.CurrentHP, myGuardTower2.MaxHP, myGuardTower2.Attack, myGuardTower2.Defense,
-		formatDestroyedStatus(myGuardTower2.Destroyed))
-	fmt.Println("----------------------------------------------")
-	fmt.Printf("Opponent: %s\n", opponentUsername)
-	fmt.Printf("👑 Opponent's King Tower (%s): HP %d/%d, DEF %d %s\n",
-		enemyKingTower.ID, enemyKingTower.CurrentHP, enemyKingTower.MaxHP, enemyKingTower.Defense,
-		formatDestroyedStatus(enemyKingTower.Destroyed))
-	fmt.Printf("🛡️ Opponent's Guard Tower 1 (%s): HP %d/%d, DEF %d %s\n",
-		enemyGuardTower1.ID, enemyGuardTower1.CurrentHP, enemyGuardTower1.MaxHP, enemyGuardTower1.Defense,
-		formatDestroyedStatus(enemyGuardTower1.Destroyed))
-	fmt.Printf("🛡️ Opponent's Guard Tower 2 (%s): HP %d/%d, DEF %d %s\n",
-		enemyGuardTower2.ID, enemyGuardTower2.CurrentHP, enemyGuardTower2.MaxHP, enemyGuardTower2.Defense,
-		formatDestroyedStatus(enemyGuardTower2.Destroyed))
+func displayGameStatus(c *network.GameClient, me *models.PlayerState, opp *models.PlayerState, turnUser string, oppUser string) {
+	fmt.Println("\n==============================================")
+	fmt.Println("           GAME STATUS")
+	fmt.Println("==============================================")
+	fmt.Printf("Current Turn: %s\n", turnUser)
+	if gameMode != "" { // Display game mode if known
+		fmt.Printf("Game Mode: %s\n", gameMode)
+	}
+	if lastActionLog != "" {
+		fmt.Printf("Last Action: %s\n", lastActionLog)
+	}
 	fmt.Println("----------------------------------------------")
 
-	// Display player's hand if it's their turn (or always, depending on preference)
-	if currentTurn == c.Username {
-		displayPlayerHandAndTargetInfo()
-	}
+	// Display Your Info (me)
+	fmt.Printf("YOUR INFO (%s):\n", me.Username)
+	fmt.Printf("  Level: %d\n", me.Level)
+	fmt.Printf("  EXP: %d / %d\n", me.CurrentEXP, me.RequiredEXPForNextLevel)
+	fmt.Printf("  Mana: %d / %d\n", me.CurrentMana, me.MaxMana)
+	fmt.Println("  Towers:")
+	fmt.Printf("    - King Tower   (ID: %s): HP=%d/%d %s\n", me.KingTower.ID, me.KingTower.CurrentHP, me.KingTower.MaxHP, formatDestroyedStatus(me.KingTower.Destroyed))
+	fmt.Printf("    - Guard Tower 1 (ID: %s): HP=%d/%d %s\n", me.GuardTower1.ID, me.GuardTower1.CurrentHP, me.GuardTower1.MaxHP, formatDestroyedStatus(me.GuardTower1.Destroyed))
+	fmt.Printf("    - Guard Tower 2 (ID: %s): HP=%d/%d %s\n", me.GuardTower2.ID, me.GuardTower2.CurrentHP, me.GuardTower2.MaxHP, formatDestroyedStatus(me.GuardTower2.Destroyed))
+	// fmt.Println("  Hand:") // Hand info will be shown by displayPlayerHandAndTargetInfo when it's player's turn
+	// if len(me.Troops) == 0 {
+	// 	fmt.Println("    Your hand is empty!")
+	// } else {
+	// 	for _, troop := range me.Troops {
+	// 		if troop.ManaCost > 0 { // Check if ManaCost is available
+	// 			fmt.Printf("    - %s (ATK:%d DEF:%d HP:%d Mana:%d)\n", troop.Name, troop.Attack, troop.Defense, troop.HP, troop.ManaCost)
+	// 		} else {
+	// 			fmt.Printf("    - %s (ATK:%d DEF:%d HP:%d)\n", troop.Name, troop.Attack, troop.Defense, troop.HP)
+	// 		}
+	// 	}
+	// }
+	fmt.Println("----------------------------------------------")
+
+	// Display Opponent Info (opp)
+	fmt.Printf("OPPONENT INFO (%s):\n", oppUser) // Use oppUser which is opponentUsername
+	fmt.Printf("  Level: %d\n", opp.Level)       // Display opponent's level
+	// Opponent's EXP and Mana are not typically shown, but towers are.
+	fmt.Println("  Towers:")
+	fmt.Printf("    - King Tower   (ID: %s): HP=%d/%d %s\n", opp.KingTower.ID, opp.KingTower.CurrentHP, opp.KingTower.MaxHP, formatDestroyedStatus(opp.KingTower.Destroyed))
+	fmt.Printf("    - Guard Tower 1 (ID: %s): HP=%d/%d %s\n", opp.GuardTower1.ID, opp.GuardTower1.CurrentHP, opp.GuardTower1.MaxHP, formatDestroyedStatus(opp.GuardTower1.Destroyed))
+	fmt.Printf("    - Guard Tower 2 (ID: %s): HP=%d/%d %s\n", opp.GuardTower2.ID, opp.GuardTower2.CurrentHP, opp.GuardTower2.MaxHP, formatDestroyedStatus(opp.GuardTower2.Destroyed))
+	// We don't usually show opponent's hand
 	fmt.Println("==============================================")
 }
 
@@ -829,6 +872,7 @@ func displayHelp() {
 	fmt.Println("    - Auto-targets enemy towers in sequence")
 	fmt.Println("    - Example: d Knight (deploys Knight to attack)")
 	fmt.Println("    - Example: d Queen (deploys Queen to heal your lowest HP tower)")
+	fmt.Println("  skip           - Skip your turn and gain bonus mana")
 	fmt.Println("")
 	fmt.Println("Information Commands:")
 	fmt.Println("  status - Display detailed game status (towers, troops, etc.)")
@@ -842,6 +886,7 @@ func displayHelp() {
 	fmt.Println("  d <troop_name> - Deploy a troop (auto-targets enemy towers in sequence)")
 	fmt.Println("                   Example: d Pawn")
 	fmt.Println("                   (Queen will automatically heal your lowest HP tower)")
+	fmt.Println("  skip           - Skip your turn and gain bonus mana")
 	fmt.Println("  status         - Display current game status")
 	fmt.Println("  help           - Display this help information")
 	fmt.Println("  quit           - Forfeit the current game and exit")

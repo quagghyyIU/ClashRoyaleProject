@@ -23,23 +23,39 @@ func NewGameSession(playerAName, playerBName string, troopSpecs []models.TroopSp
 	// Initialize random seed
 	rand.NewSource(time.Now().UnixNano())
 
-	// Create two players
-	playerA := NewPlayer(playerAName)
-	var err error
-	playerA.CurrentEXP, playerA.Level, err = jsonHandler.LoadPlayerData(playerAName)
-	if err != nil {
-		log.Printf("Error loading player data for %s: %v. Using default stats.", playerAName, err)
-		// Keep default NewPlayer stats (Level 1, 0 EXP)
+	// Create player A
+	playerA := NewPlayer(playerAName) // Initializes with defaults (Lvl 1, 0 EXP, etc)
+	profileA, errA := jsonHandler.LoadPlayerData(playerAName)
+	if errA != nil {
+		log.Printf("Error loading player data for %s: %v. Using default/initial stats.", playerAName, errA)
+		// Keep default NewPlayer stats, but ensure RequiredEXP is set based on level 1
+		playerA.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerA.Level) // Should be 100 for level 1
+	} else {
+		playerA.Level = profileA.Level
+		playerA.CurrentEXP = profileA.CurrentEXP
+		playerA.RequiredEXPForNextLevel = profileA.RequiredEXPForNextLevel
+		// If loaded profile had 0 for RequiredEXP (e.g. old format or error), recalculate
+		if playerA.RequiredEXPForNextLevel == 0 {
+			playerA.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerA.Level)
+		}
 	}
-	playerA.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerA.Level)
+	playerA.CurrentMana = shared.InitialMana // Initialize Mana for Enhanced TCR
 
+	// Create player B
 	playerB := NewPlayer(playerBName)
-	playerB.CurrentEXP, playerB.Level, err = jsonHandler.LoadPlayerData(playerBName)
-	if err != nil {
-		log.Printf("Error loading player data for %s: %v. Using default stats.", playerBName, err)
-		// Keep default NewPlayer stats (Level 1, 0 EXP)
+	profileB, errB := jsonHandler.LoadPlayerData(playerBName)
+	if errB != nil {
+		log.Printf("Error loading player data for %s: %v. Using default/initial stats.", playerBName, errB)
+		playerB.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerB.Level)
+	} else {
+		playerB.Level = profileB.Level
+		playerB.CurrentEXP = profileB.CurrentEXP
+		playerB.RequiredEXPForNextLevel = profileB.RequiredEXPForNextLevel
+		if playerB.RequiredEXPForNextLevel == 0 {
+			playerB.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerB.Level)
+		}
 	}
-	playerB.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(playerB.Level)
+	playerB.CurrentMana = shared.InitialMana // Initialize Mana for Enhanced TCR
 
 	// Initialize the game session
 	gs := &GameSession{
@@ -168,6 +184,15 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 		return "Troop not found in your hand.", false
 	}
 
+	// Check mana cost for non-special troops
+	if !troop.Spec.IsSpecialOnly {
+		if actingPlayer.CurrentMana < troop.Spec.ManaCost {
+			return fmt.Sprintf("Not enough mana to deploy %s. Requires %d, you have %d.", troopName, troop.Spec.ManaCost, actingPlayer.CurrentMana), false
+		}
+		// Deduct mana only if it's a regular troop and has mana cost
+		actingPlayer.CurrentMana -= troop.Spec.ManaCost
+	}
+
 	// Handle Queen's special ability (or other special-only troops)
 	if troop.Spec.IsSpecialOnly {
 		// Apply special ability
@@ -206,8 +231,15 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 		targetTower = opponentPlayer.GuardTower2
 	}
 
-	// Calculate damage
-	damage := CalculateDamage(troop.CurrentATK, targetTower.CurrentDEF)
+	// Calculate damage using Enhanced Combat with Crit Chance
+	// For now, using DefaultTroopCritChance from shared constants for all troops.
+	// This could be made troop-specific later by fetching crit chance from troop.Spec if available.
+	damage, didCrit := CalculateDamageEnhanced(troop.CurrentATK, targetTower.CurrentDEF, float64(shared.DefaultTroopCritChance))
+
+	var critMessage string
+	if didCrit {
+		critMessage = " (CRITICAL HIT!)"
+	}
 
 	// Apply damage to target tower
 	targetTower.CurrentHP -= damage
@@ -225,8 +257,8 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 		actingPlayer.CurrentEXP += targetTower.Spec.DestroyEXP
 		levelUpMessage := gs.HandleExperienceAndLevelUp(actingPlayer)
 
-		destructionMessage = fmt.Sprintf("%s's troop %s dealt %d damage to %s and destroyed it!",
-			actingPlayer.Username, troopName, damage, targetTowerID)
+		destructionMessage = fmt.Sprintf("%s's troop %s dealt %d damage%s to %s and destroyed it!",
+			actingPlayer.Username, troopName, damage, critMessage, targetTowerID)
 		if levelUpMessage != "" {
 			destructionMessage += " " + levelUpMessage
 		}
@@ -240,9 +272,8 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 
 	// Check win condition
 	if targetTower == opponentPlayer.KingTower && targetTower.Destroyed {
-		gs.GameState.SetWinner(actingPlayer.Username)
-		// Award end-game EXP - we'll do this in handleGameOver or similar later
-		return fmt.Sprintf("%s %s wins the game!", destructionMessage, actingPlayer.Username), true
+		gameOverMsg := gs.HandleGameOver(actingPlayer.Username, false) // false because it's not a draw
+		return destructionMessage + " " + gameOverMsg, true
 	}
 
 	// If a tower was destroyed, the player can continue attacking
@@ -261,8 +292,112 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 		gs.GameState.SwitchTurn()
 	}
 
-	return fmt.Sprintf("%s's troop %s dealt %d damage to %s (HP remaining: %d).",
-		actingPlayer.Username, troopName, damage, targetTowerID, targetTower.CurrentHP), true
+	return fmt.Sprintf("%s's troop %s dealt %d damage%s to %s (HP remaining: %d).",
+		actingPlayer.Username, troopName, damage, critMessage, targetTowerID, targetTower.CurrentHP), true
+}
+
+// SkipTurn handles a player skipping their turn, granting them bonus mana.
+// Returns a message describing what happened and whether the action was successful.
+func (gs *GameSession) SkipTurn(playerUsername string) (string, bool) {
+	// Check if game is already over
+	if gs.GameState.IsGameOver {
+		return "Game is already over.", false
+	}
+
+	// Get the player who is skipping the turn
+	var actingPlayer *Player
+	if playerUsername == gs.GameState.PlayerA.Username {
+		actingPlayer = gs.GameState.PlayerA
+	} else if playerUsername == gs.GameState.PlayerB.Username {
+		actingPlayer = gs.GameState.PlayerB
+	} else {
+		return "Invalid player username.", false
+	}
+
+	// Check if it's the player's turn
+	if gs.GameState.CurrentTurn != playerUsername {
+		return "It's not your turn.", false
+	}
+
+	// Calculate mana gain for skipping (1.5x ManaRegenRate)
+	// Integer arithmetic: ManaRegenRate + ManaRegenRate / 2
+	manaGainOnSkip := shared.ManaRegenRate + (shared.ManaRegenRate / 2)
+
+	oldMana := actingPlayer.CurrentMana
+	actingPlayer.CurrentMana += manaGainOnSkip
+	if actingPlayer.CurrentMana > shared.MaxMana {
+		actingPlayer.CurrentMana = shared.MaxMana
+	}
+	gainedMana := actingPlayer.CurrentMana - oldMana
+
+	// Prepare message
+	skipMessage := fmt.Sprintf("%s skipped their turn and gained %d mana.", actingPlayer.Username, gainedMana)
+	log.Printf(skipMessage) // Server-side log
+
+	// Switch turn to the other player.
+	// The SwitchTurn() method in state.go will handle giving the *next* player their normal ManaRegenRate.
+	gs.GameState.SwitchTurn()
+	gs.GameState.LastActionLog = skipMessage // Update last action for client display
+
+	return skipMessage, true
+}
+
+// HandleGameOver processes end-of-game logic, including EXP awards and saving player data.
+func (gs *GameSession) HandleGameOver(winnerUsername string, isDraw bool) string {
+	gs.GameState.IsGameOver = true
+	finalMessage := ""
+
+	playerA := gs.GameState.PlayerA
+	playerB := gs.GameState.PlayerB
+
+	if isDraw {
+		gs.GameState.Winner = "DRAW"
+		finalMessage = "The game is a DRAW!"
+		log.Printf("Game ended in a draw between %s and %s.", playerA.Username, playerB.Username)
+
+		// Award draw EXP to both players
+		playerA.CurrentEXP += shared.DrawEXPReward
+		playerB.CurrentEXP += shared.DrawEXPReward
+		levelUpMsgA := gs.HandleExperienceAndLevelUp(playerA) // This also saves data
+		levelUpMsgB := gs.HandleExperienceAndLevelUp(playerB) // This also saves data
+
+		if levelUpMsgA != "" {
+			finalMessage += "\nPlayer A: " + levelUpMsgA
+		}
+		if levelUpMsgB != "" {
+			finalMessage += "\nPlayer B: " + levelUpMsgB
+		}
+
+	} else {
+		gs.GameState.Winner = winnerUsername
+		var winningPlayer *Player
+		var losingPlayer *Player // For potential future use, e.g. different save logic
+
+		if winnerUsername == playerA.Username {
+			winningPlayer = playerA
+			losingPlayer = playerB
+		} else {
+			winningPlayer = playerB
+			losingPlayer = playerA
+		}
+
+		finalMessage = fmt.Sprintf("Game Over! Winner: %s!", winnerUsername)
+		log.Printf("Game ended. Winner: %s. Loser: %s.", winningPlayer.Username, losingPlayer.Username)
+
+		// Award win EXP to the winner
+		winningPlayer.CurrentEXP += shared.WinEXPReward
+		levelUpMsgWinner := gs.HandleExperienceAndLevelUp(winningPlayer) // Saves winner's data
+		// Save losing player's data as well (they might have gained EXP from destroying units)
+		_ = gs.HandleExperienceAndLevelUp(losingPlayer) // We call this to ensure loser's data (like EXP from units) is saved.
+
+		if levelUpMsgWinner != "" {
+			finalMessage += "\n" + levelUpMsgWinner
+		}
+	}
+
+	// Note: HandleExperienceAndLevelUp already saves individual player data.
+	// If global game state needed saving, it would be done here.
+	return finalMessage
 }
 
 // HandleExperienceAndLevelUp checks for player level up and updates stats accordingly.
@@ -270,26 +405,30 @@ func (gs *GameSession) DeployTroop(playerUsername, troopName, targetTowerID stri
 func (gs *GameSession) HandleExperienceAndLevelUp(player *Player) string {
 	leveledUp := false
 	levelUpMessage := ""
-	for player.CurrentEXP >= player.RequiredEXPForNextLevel {
+	for player.CurrentEXP >= player.RequiredEXPForNextLevel && player.RequiredEXPForNextLevel > 0 { // Add check for > 0 to prevent infinite loop if misconfigured
 		player.Level++
 		player.CurrentEXP -= player.RequiredEXPForNextLevel
-		// It's good practice to ensure CurrentEXP doesn't become negative if it's exactly RequiredEXPForNextLevel
 		if player.CurrentEXP < 0 {
 			player.CurrentEXP = 0
 		}
-		player.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(player.Level) // Use shared util
+		player.RequiredEXPForNextLevel = shared.CalculateRequiredEXP(player.Level)
 		leveledUp = true
 	}
 	if leveledUp {
 		levelUpMessage = fmt.Sprintf("%s leveled up to Level %d! Next level at %d EXP.",
 			player.Username, player.Level, player.RequiredEXPForNextLevel)
-		fmt.Println(levelUpMessage) // For server-side logging for now
+		log.Println(levelUpMessage) // Server-side log
 	}
 
 	// Always save player data after EXP change (level up or not)
 	if gs.JSONHandler != nil {
-		err := gs.JSONHandler.SavePlayerData(player.Username, player.CurrentEXP, player.Level)
-		if err != nil {
+		playerProfile := storage.PlayerProfile{
+			Username:                player.Username,
+			Level:                   player.Level,
+			CurrentEXP:              player.CurrentEXP,
+			RequiredEXPForNextLevel: player.RequiredEXPForNextLevel,
+		}
+		if err := gs.JSONHandler.SavePlayerData(playerProfile); err != nil {
 			log.Printf("Error saving player data for %s after EXP update: %v", player.Username, err)
 		}
 	} else {

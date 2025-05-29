@@ -4,10 +4,7 @@ A text-based implementation of a simplified Clash Royale-like game using Go, TCP
 
 ## Project Overview
 
-TCR is a strategic card game where players deploy troops to attack the opponent's towers. The game has two modes:
-
-1. **Simple TCR**: Turn-based gameplay with basic mechanics
-2. **Enhanced TCR**: Real-time gameplay with mana system, critical hits, and player progression
+TCR is a strategic card game where players deploy troops to attack the opponent's towers. The game currently emphasizes turn-based mechanics with a mana system, critical hits, and player progression.
 
 ## Game Entities
 
@@ -29,138 +26,90 @@ The game features various troops with different stats and abilities:
 Game data is stored in JSON configuration files under the `configs/` directory:
 - `troops.json`: Contains troop specifications
 - `towers.json`: Contains tower specifications
+(See `CONFIG_GUIDE.md` for more details, including where core constants like mana rates are defined.)
 
 ## Development Status
 
-Currently in Phase 2 of development, which includes:
-- Project structure setup ✅
-- Core data structures and configuration files ✅
-- Basic loading utilities ✅
-- Complete game logic implementation for Simple TCR ✅
-- Offline testing functionality ✅
-- Basic TCP client-server communication ✅
-- Login and user identification ✅
+Currently, the project has completed most **Phase 3** features and is incorporating elements of **Phase 4**.
+Key implemented features include:
+- Robust project structure
+- Core data structures and configuration file loading
+- Complete game logic implementation for turn-based play
+- Offline testing functionality
+- TCP client-server communication
+- User registration, login, and basic session management
+- Networked gameplay with commands: deploy, skip, status, help, quit
+- Mana system (initial/regen/max)
+- Basic critical hit system
+- Player experience (EXP) and leveling system
+- Troop replenishment after deployment
 
-## Simple TCR Game Rules
+## Simple TCR Game Rules (Current Implementation)
 
-In Simple TCR mode:
-1. Players take turns deploying troops to attack opponent towers
-2. The Guard Tower 1 must be destroyed before Guard Tower 2 or King Tower can be targeted
-3. When a troop destroys a tower, the player gets an immediate second attack
-4. The Queen troop can be deployed to heal the friendly tower with the lowest HP percentage
-5. The game ends when a player's King Tower is destroyed
+1. Players take turns deploying troops to attack opponent towers.
+2. Mana is required to deploy most troops.
+3. The Guard Tower 1 must be destroyed before Guard Tower 2 or King Tower can be targeted.
+4. When a troop destroys a tower, the player gets an immediate second attack opportunity in the same turn.
+5. The Queen troop can be deployed to heal the friendly tower with the lowest HP percentage (consumes troop, costs mana like other special abilities if applicable).
+6. Players can `skip` their turn to gain a 1.5x mana regeneration bonus for that turn.
+7. The game ends when a player's King Tower is destroyed.
 
 ## How to Run
 
-### Phase 1: Offline Testing
+### Server
+1. Navigate to the `tcr` directory: `cd tcr`
+2. Build the server: `go build ./cmd/server`
+3. Run the server: `./server` (defaults to online mode on port :8080)
+   - For offline testing: `./server -mode offline`
 
-To test the Simple TCR game logic in offline mode:
+### Client (for Online Mode)
+1. Navigate to the `tcr` directory: `cd tcr` (in a separate terminal)
+2. Build the client: `go build ./cmd/client`
+3. Run the client: `./client` (defaults to connect to `localhost:8080`)
+   - Run two client instances for a networked game.
 
-1. Build and run the server with the offline flag:
-   ```bash
-   cd tcr
-   go build ./cmd/server
-   ./server -mode offline
-   ```
+### Automated Build & Run (Windows Batch File)
+A `run_game.bat` script is available in the project root. Double-click it to automatically build the server and client, then launch the server and two client windows.
 
-2. Follow the on-screen prompts to play the game:
-   - The game starts with Player A's turn
-   - Use the `d <troop_name> <tower_number>` command to attack
-   - Tower numbers: 1=Guard1, 2=Guard2, 3=King
-   - Examples: `d Pawn 1` to attack Guard Tower 1, `d Knight 3` to attack King Tower (if valid)
-   - To deploy the Queen and use her healing ability, use: `d Queen 1` (the target number doesn't matter)
-
-### Phase 2: Network Testing
-
-To test the client-server networking:
-
-1. Start the server:
-   ```bash
-   cd tcr
-   go build ./cmd/server
-   ./server -addr :8080
-   ```
-
-2. In a separate terminal, start a client:
-   ```bash
-   cd tcr
-   go build ./cmd/client
-   ./client -addr localhost:8080
-   ```
-
-3. Enter a username when prompted.
-4. The client will connect to the server and log in.
-5. You can start additional clients to test multiple connections.
-
-### Phase 3: Full Networked Game
-
-To play the Simple TCR game over the network in Phase 3:
-
-1. Start the server:
-   ```bash
-   cd tcr
-   go build ./cmd/server
-   ./server -addr :8080
-   ```
-
-2. Start two clients in separate terminals:
-   ```bash
-   cd tcr
-   go build ./cmd/client
-   ./client -addr localhost:8080
-   ```
-
-3. Choose to register a new account or login with an existing account.
-   - Enter your username and password when prompted.
-   - User accounts are stored securely on the server.
-
-4. Once two players are connected, a game will automatically start.
-5. Players take turns deploying troops to attack the opponent's towers.
-6. Available commands during the game:
+### Gameplay (Online Mode)
+1. Choose to register a new account or login with an existing account on each client.
+2. Once two players are connected and logged in, a game will automatically start.
+3. Available commands during the game:
    - `d <troop_name>` - Deploy a troop (auto-targeting is enabled)
-     - Example: `d Knight` to deploy Knight to attack the next valid target
-     - Example: `d Queen` to deploy the Queen and heal your lowest HP tower
+     - Example: `d Knight`
+     - Example: `d Queen` (heals your lowest HP tower)
+   - `skip` - Skip your turn and gain bonus mana (1.5x normal regeneration)
    - `status` - Display the current game status
    - `help` - Display available commands
-   - `quit` - Exit the game
-
-7. Game rules apply as described above:
-   - The client automatically targets enemy towers in the correct sequence:
-     - Guard Tower 1 must be destroyed before attacking Guard Tower 2 or King Tower
-   - Queen heals your tower with the lowest HP and is consumed
-   - A troop that destroys a tower gets a second attack in the same turn
-   - The game ends when a player's King Tower is destroyed
+   - `quit` - Forfeit the game and exit
 
 ## User Account System
 
-TCR now includes a simple user account system:
-
+TCR includes a user account system:
 1. **Registration**: New users can create an account with a username and password.
 2. **Authentication**: Users must provide valid credentials to log in.
 3. **Session Management**: The server prevents multiple logins with the same account.
-
 User data is stored in JSON format in the `data/users/` directory on the server.
+
+## Recent Gameplay Enhancements
+
+- **Mana Economy Update**: The game now features a more generous mana system to improve gameplay flow:
+  - Initial Mana: 15
+  - Mana Regeneration Rate (per turn): 5
+  - Max Mana: 20
+- **Skip Turn**: Players can now use the `skip` command to pass their turn and receive a 1.5x mana regeneration bonus for that turn.
+- **Critical Hits**: Troops now have a chance to deal critical damage.
+- **EXP & Leveling**: Players gain EXP for actions like destroying towers and winning games, allowing them to level up.
 
 ## Network Protocol
 
-TCR uses a simple network protocol based on JSON messages with length-prefixed framing:
-1. Each message is encoded as JSON
-2. A 4-byte header containing the length of the JSON message is prepended
-3. Messages include a type and a payload specific to that type
-
+TCR uses a simple network protocol based on JSON messages with length-prefixed framing.
 For details on the protocol and message formats, see `doc/ApplicationPDUDescription.md`.
 
-## Current Limitations
+## Current Focus & Coming Soon
 
-- **Phase 1**: Troop exhaustion - Troops are consumed after deployment and not replenished. Players start with 3 regular troops plus special troops (Queen).
-- **Phase 2**: Limited command support - The networking layer currently only supports basic connection and login. Game actions will be implemented in Phase 3.
-
-## Coming Soon
-
-The next phases will implement:
-- Integration of networked gameplay for Simple TCR (Phase 3)
-- Enhanced TCR with real-time gameplay (Phase 4)
-- Mana system (Phase 4)
-- Critical hits (Phase 4)
-- Player progression with experience and leveling (Phases 4-5)
-- Troop replenishment mechanism (Phase 3-4)
+Focus is on refining existing systems and moving towards **Enhanced TCR** features:
+- Further balancing of troop stats, mana costs, and game pacing.
+- Potential for more diverse troop special abilities.
+- Exploring real-time gameplay mechanics (core of Phase 4).
+- UI/UX improvements for the text-based interface.

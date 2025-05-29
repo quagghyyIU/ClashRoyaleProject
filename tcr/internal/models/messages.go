@@ -16,6 +16,7 @@ const (
 	MsgTypeActionResult          = "ACTION_RESULT"
 	MsgTypeTurnNotification      = "TURN_NOTIFICATION"
 	MsgTypeGameOverNotification  = "GAME_OVER_NOTIFICATION"
+	MsgTypeSkipTurnCommand       = "SKIP_TURN_COMMAND"
 )
 
 // GenericMessage is the wrapper for all network messages
@@ -75,19 +76,25 @@ type TowerState struct {
 
 // TroopState represents the current state of a troop
 type TroopState struct {
-	Name    string `json:"name"`    // Troop name
-	HP      int    `json:"hp"`      // Health points
-	Attack  int    `json:"attack"`  // Attack value
-	Defense int    `json:"defense"` // Defense value
+	Name     string `json:"name"`     // Troop name
+	HP       int    `json:"hp"`       // Health points
+	Attack   int    `json:"attack"`   // Attack value
+	Defense  int    `json:"defense"`  // Defense value
+	ManaCost int    `json:"manaCost"` // Mana cost of the troop (from TroopSpec)
 }
 
 // PlayerState represents the current state of a player
 type PlayerState struct {
-	Username    string       `json:"username"`    // Player's username
-	KingTower   TowerState   `json:"kingTower"`   // King tower state
-	GuardTower1 TowerState   `json:"guardTower1"` // Guard tower 1 state
-	GuardTower2 TowerState   `json:"guardTower2"` // Guard tower 2 state
-	Troops      []TroopState `json:"troops"`      // Available troops
+	Username                string       `json:"username"`                // Player's username
+	KingTower               TowerState   `json:"kingTower"`               // King tower state
+	GuardTower1             TowerState   `json:"guardTower1"`             // Guard tower 1 state
+	GuardTower2             TowerState   `json:"guardTower2"`             // Guard tower 2 state
+	Troops                  []TroopState `json:"troops"`                  // Available troops
+	Level                   int          `json:"level"`                   // Player's current level
+	CurrentEXP              int          `json:"currentEXP"`              // Player's current EXP
+	RequiredEXPForNextLevel int          `json:"requiredEXPForNextLevel"` // EXP needed for next level
+	CurrentMana             int          `json:"currentMana"`             // Player's current mana
+	MaxMana                 int          `json:"maxMana"`                 // Player's maximum mana (e.g., 10)
 }
 
 // GameStartNotificationPayload is sent by server to notify clients that a game is starting
