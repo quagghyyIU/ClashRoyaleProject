@@ -23,6 +23,14 @@ type UserData struct {
 	Password string `json:"password"`
 }
 
+// PlayerProfile represents the data for a player that is persisted.
+type PlayerProfile struct {
+	Username                string `json:"username"`
+	Level                   int    `json:"level"`
+	CurrentEXP              int    `json:"currentEXP"`
+	RequiredEXPForNextLevel int    `json:"requiredEXPForNextLevel"`
+}
+
 // NewJSONHandler creates a new JSON handler
 func NewJSONHandler(configDir, dataDir string) *JSONHandler {
 	return &JSONHandler{
@@ -125,63 +133,72 @@ func (h *JSONHandler) UserExists(username string) bool {
 	return err == nil
 }
 
-// SavePlayerData saves player data to a JSON file (for Enhanced TCR)
-func (h *JSONHandler) SavePlayerData(username string, currentEXP, level int) error {
-	playerData := struct {
-		Username   string `json:"username"`
-		CurrentEXP int    `json:"currentEXP"`
-		Level      int    `json:"level"`
-	}{
-		Username:   username,
-		CurrentEXP: currentEXP,
-		Level:      level,
+// SavePlayerData saves player profile data to a JSON file.
+// The data is stored in <DataDir>/players/<username>.json.
+func (h *JSONHandler) SavePlayerData(profile PlayerProfile) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	playersDataDir := filepath.Join(h.DataDir, "players")
+	if err := os.MkdirAll(playersDataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create player data directory '%s': %w", playersDataDir, err)
 	}
 
-	data, err := json.MarshalIndent(playerData, "", "  ")
+	filePath := filepath.Join(playersDataDir, profile.Username+".json")
+
+	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
-		return fmt.Errorf("error marshaling player data: %w", err)
+		return fmt.Errorf("error marshaling player profile for %s: %w", profile.Username, err)
 	}
-
-	filename := fmt.Sprintf("player_%s.json", username)
-	filePath := filepath.Join(h.DataDir, filename)
 
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("error writing player data file: %w", err)
+		return fmt.Errorf("error writing player profile file for %s: %w", profile.Username, err)
 	}
-
+	log.Printf("Player data for %s saved to %s", profile.Username, filePath)
 	return nil
 }
 
-// LoadPlayerData loads player data from a JSON file (for Enhanced TCR)
-func (h *JSONHandler) LoadPlayerData(username string) (int, int, error) {
-	filename := fmt.Sprintf("player_%s.json", username)
-	filePath := filepath.Join(h.DataDir, filename)
+// LoadPlayerData loads a player's profile from a JSON file.
+// It looks for <DataDir>/players/<username>.json.
+// If the file doesn't exist, it returns a default profile for a new level 1 player.
+func (h *JSONHandler) LoadPlayerData(username string) (PlayerProfile, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	playersDataDir := filepath.Join(h.DataDir, "players")
+	filePath := filepath.Join(playersDataDir, username+".json")
 
 	log.Printf("[LOADPLAYERDATA_DEBUG] Attempting to load player data for: Username='%s', FullPath='%s'", username, filePath)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Printf("[LOADPLAYERDATA_DEBUG] os.ReadFile error for '%s': %v. os.IsNotExist(err): %t", filePath, err, os.IsNotExist(err))
 		if os.IsNotExist(err) {
-			// If file doesn't exist, return default values
-			return 0, 1, nil
+			log.Printf("[LOADPLAYERDATA_DEBUG] Player data file not found for '%s'. Returning default profile.", username)
+			// Return default profile for a new player
+			return PlayerProfile{
+				Username:                username,
+				Level:                   1,
+				CurrentEXP:              0,
+				RequiredEXPForNextLevel: 100, // Base EXP for level 1 to level up, as per plan
+			}, nil
 		}
-		return 0, 1, fmt.Errorf("error reading player data file: %w", err)
+		return PlayerProfile{}, fmt.Errorf("error reading player data file '%s': %w", filePath, err)
 	}
 
 	log.Printf("[LOADPLAYERDATA_DEBUG] Successfully read data for '%s', length: %d", filePath, len(data))
 
-	var playerData struct {
-		Username   string `json:"username"`
-		CurrentEXP int    `json:"currentEXP"`
-		Level      int    `json:"level"`
-	}
-
-	if err := json.Unmarshal(data, &playerData); err != nil {
+	var profile PlayerProfile
+	if err := json.Unmarshal(data, &profile); err != nil {
 		log.Printf("[LOADPLAYERDATA_DEBUG] JSON unmarshal error for '%s': %v", filePath, err)
-		return 0, 1, fmt.Errorf("error unmarshaling player data: %w", err)
+		return PlayerProfile{}, fmt.Errorf("error unmarshaling player data from '%s': %w", filePath, err)
 	}
 
-	log.Printf("[LOADPLAYERDATA_DEBUG] Successfully unmarshaled data for '%s': EXP=%d, Level=%d", filePath, playerData.CurrentEXP, playerData.Level)
-	return playerData.CurrentEXP, playerData.Level, nil
+	// Ensure username in profile matches requested username, or fill if empty (older format handling if any)
+	if profile.Username == "" {
+		profile.Username = username
+	}
+
+	log.Printf("[LOADPLAYERDATA_DEBUG] Successfully unmarshaled data for '%s': EXP=%d, Level=%d, ReqEXP=%d",
+		filePath, profile.CurrentEXP, profile.Level, profile.RequiredEXPForNextLevel)
+	return profile, nil
 }

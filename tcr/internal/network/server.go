@@ -146,6 +146,8 @@ func (s *GameServer) handleClient(conn net.Conn) {
 			s.handleRegister(client, message.Payload)
 		case models.MsgTypeDeployTroopCommand:
 			s.handleDeployTroop(client, message.Payload)
+		case models.MsgTypeSkipTurnCommand:
+			s.handleSkipTurn(client, message.Payload)
 		default:
 			log.Printf("Unknown message type: %s", message.Type)
 		}
@@ -454,19 +456,25 @@ func (s *GameServer) createPlayerState(player *game.Player) models.PlayerState {
 	troopStates := make([]models.TroopState, len(player.Troops))
 	for i, troop := range player.Troops {
 		troopStates[i] = models.TroopState{
-			Name:    troop.Spec.Name,
-			HP:      troop.CurrentHP,
-			Attack:  troop.CurrentATK,
-			Defense: troop.CurrentDEF,
+			Name:     troop.Spec.Name,
+			HP:       troop.CurrentHP,
+			Attack:   troop.CurrentATK,
+			Defense:  troop.CurrentDEF,
+			ManaCost: troop.Spec.ManaCost,
 		}
 	}
 
 	return models.PlayerState{
-		Username:    player.Username,
-		KingTower:   kingTowerState,
-		GuardTower1: guardTower1State,
-		GuardTower2: guardTower2State,
-		Troops:      troopStates,
+		Username:                player.Username,
+		KingTower:               kingTowerState,
+		GuardTower1:             guardTower1State,
+		GuardTower2:             guardTower2State,
+		Troops:                  troopStates,
+		Level:                   player.Level,
+		CurrentEXP:              player.CurrentEXP,
+		RequiredEXPForNextLevel: player.RequiredEXPForNextLevel,
+		CurrentMana:             player.CurrentMana,
+		MaxMana:                 shared.MaxMana,
 	}
 }
 
@@ -593,6 +601,54 @@ func (s *GameServer) handleDeployTroop(client *Client, payload interface{}) {
 	}
 }
 
+// handleSkipTurn handles a skip turn command
+func (s *GameServer) handleSkipTurn(client *Client, payload interface{}) {
+	// Check if player is in a game
+	s.mutex.Lock()
+	session := s.getSessionForPlayer(client)
+	s.mutex.Unlock()
+
+	if session == nil {
+		sendError(client.Conn, "You are not in a game")
+		return
+	}
+
+	// No payload to parse for skip turn, just the client's username is needed.
+
+	// Pass command to the game engine
+	actionResultMsg, success := session.GameEngine.SkipTurn(client.Username)
+
+	// Send action result to the player who skipped
+	actionResult := models.ActionResultPayload{
+		Success: success,
+		Action:  "Skip Turn",
+		Message: actionResultMsg,
+	}
+
+	resultMsg := models.GenericMessage{
+		Type:    models.MsgTypeActionResult, // Use ActionResult to inform the skipper
+		Payload: actionResult,
+	}
+
+	WriteMessage(client.Conn, resultMsg)
+
+	// If successful, broadcast updated game state to both players
+	if success {
+		// The actionResultMsg from SkipTurn already contains the log like "Player X skipped..."
+		// This will be set as LastActionLog in GameEngine.SkipTurn, so broadcastGameState will pick it up.
+		s.broadcastGameState(session, actionResultMsg)
+
+		// Check if game is over (unlikely for a skip, but good practice)
+		if session.GameEngine.GameState.IsGameOver {
+			s.handleGameOver(session)
+			return
+		}
+
+		// If game continues, send turn notification to the *next* player
+		s.sendTurnNotification(session)
+	}
+}
+
 // handleGameOver handles game over events
 func (s *GameServer) handleGameOver(session *GameSession) {
 	winnerUsername := session.GameEngine.GameState.Winner // Username of the winner
@@ -614,10 +670,14 @@ func (s *GameServer) handleGameOver(session *GameSession) {
 		// Save data for both players even if no win/loss EXP is awarded
 		pA := session.GameEngine.GameState.PlayerA
 		pB := session.GameEngine.GameState.PlayerB
-		if err := s.JSONHandler.SavePlayerData(pA.Username, pA.CurrentEXP, pA.Level); err != nil {
+		if err := s.JSONHandler.SavePlayerData(storage.PlayerProfile{
+			Username: pA.Username, Level: pA.Level, CurrentEXP: pA.CurrentEXP, RequiredEXPForNextLevel: pA.RequiredEXPForNextLevel,
+		}); err != nil {
 			log.Printf("Error saving player data for %s: %v", pA.Username, err)
 		}
-		if err := s.JSONHandler.SavePlayerData(pB.Username, pB.CurrentEXP, pB.Level); err != nil {
+		if err := s.JSONHandler.SavePlayerData(storage.PlayerProfile{
+			Username: pB.Username, Level: pB.Level, CurrentEXP: pB.CurrentEXP, RequiredEXPForNextLevel: pB.RequiredEXPForNextLevel,
+		}); err != nil {
 			log.Printf("Error saving player data for %s: %v", pB.Username, err)
 		}
 		// Proceed with standard game over notification without win/loss EXP messages
@@ -625,19 +685,47 @@ func (s *GameServer) handleGameOver(session *GameSession) {
 
 	if winningPlayer != nil { // If there was a winner
 		log.Printf("Player %s won. Awarding %d EXP.", winnerUsername, shared.WinEXPReward)
-		winningPlayer.CurrentEXP += shared.WinEXPReward
-		levelUpMsgWinner := session.GameEngine.HandleExperienceAndLevelUp(winningPlayer)
-		if levelUpMsgWinner != "" {
-			log.Printf("Post-game level up for winner %s: %s", winnerUsername, levelUpMsgWinner)
-			// This message could be appended to the GameOverNotification or sent separately
-		}
-		if err := s.JSONHandler.SavePlayerData(winningPlayer.Username, winningPlayer.CurrentEXP, winningPlayer.Level); err != nil {
+		// winningPlayer.CurrentEXP += shared.WinEXPReward // This is now handled by GameEngine.HandleGameOver
+		// levelUpMsgWinner := session.GameEngine.HandleExperienceAndLevelUp(winningPlayer) // This is also handled by GameEngine.HandleGameOver
+		// if levelUpMsgWinner != "" {
+		// 	log.Printf("Post-game level up for winner %s: %s", winnerUsername, levelUpMsgWinner)
+		// 	// This message could be appended to the GameOverNotification or sent separately
+		// }
+
+		// GameEngine.HandleGameOver already calls HandleExperienceAndLevelUp which saves player data.
+		// So, explicit saves here might be redundant if GameEngine.HandleGameOver is the sole authority.
+		// However, the original handleGameOver in engine.go was designed to be called BY the network layer (like this one)
+		// and engine.HandleGameOver itself doesn't award match EXP, it relies on the caller.
+
+		// The GameEngine's HandleGameOver (which awards EXP and then calls HandleExperienceAndLevelUp for saving)
+		// should be the one called if we want the engine to manage this. The current server.handleGameOver seems to duplicate some logic.
+
+		// For now, assuming the server's handleGameOver is orchestrating and gameEngine.HandleGameOver was called by DeployTroop.
+		// The main thing is that player data (winningPlayer, losingPlayer) should be saved after any EXP changes.
+		// The call to GameEngine.HandleExperienceAndLevelUp (which saves) is inside GameEngine.HandleGameOver.
+		// If GameEngine.DeployTroop calls GameEngine.HandleGameOver, then saves are done.
+		// This server.handleGameOver might be for cases where the game ends not due to a troop deployment (e.g. disconnect).
+
+		// Let's simplify: if gameEngine.HandleGameOver was called (e.g. from DeployTroop), data is saved.
+		// If this server.handleGameOver is for other reasons (like disconnect), we save here.
+		// The original gameEngine.HandleGameOver modified player stats and called its own HandleExperienceAndLevelUp.
+
+		// Reconciling: game.HandleGameOver in engine.go *is* called by DeployTroop and does EXP and saving.
+		// This network.handleGameOver should primarily be for sending notifications and session cleanup.
+		// It should rely on the game.Player objects already having their EXP/Level updated by the engine.
+
+		// Save winning player's already updated profile (updated by engine)
+		if err := s.JSONHandler.SavePlayerData(storage.PlayerProfile{
+			Username: winningPlayer.Username, Level: winningPlayer.Level, CurrentEXP: winningPlayer.CurrentEXP, RequiredEXPForNextLevel: winningPlayer.RequiredEXPForNextLevel,
+		}); err != nil {
 			log.Printf("Error saving player data for winner %s: %v", winningPlayer.Username, err)
 		}
 
-		// Save loser's data as well (their EXP might have changed from destroying units)
+		// Save loser's data as well (their EXP might have changed from destroying units, and engine would have updated it)
 		if losingPlayer != nil {
-			if err := s.JSONHandler.SavePlayerData(losingPlayer.Username, losingPlayer.CurrentEXP, losingPlayer.Level); err != nil {
+			if err := s.JSONHandler.SavePlayerData(storage.PlayerProfile{
+				Username: losingPlayer.Username, Level: losingPlayer.Level, CurrentEXP: losingPlayer.CurrentEXP, RequiredEXPForNextLevel: losingPlayer.RequiredEXPForNextLevel,
+			}); err != nil {
 				log.Printf("Error saving player data for loser %s: %v", losingPlayer.Username, err)
 			}
 		}
@@ -711,7 +799,9 @@ func (s *GameServer) handlePlayerDisconnect(client *Client) {
 	}
 
 	if disconnectedPlayerGameObj != nil {
-		if err := s.JSONHandler.SavePlayerData(disconnectedPlayerGameObj.Username, disconnectedPlayerGameObj.CurrentEXP, disconnectedPlayerGameObj.Level); err != nil {
+		if err := s.JSONHandler.SavePlayerData(storage.PlayerProfile{
+			Username: disconnectedPlayerGameObj.Username, Level: disconnectedPlayerGameObj.Level, CurrentEXP: disconnectedPlayerGameObj.CurrentEXP, RequiredEXPForNextLevel: disconnectedPlayerGameObj.RequiredEXPForNextLevel,
+		}); err != nil {
 			log.Printf("Error saving player data for disconnecting player %s: %v", disconnectedPlayerGameObj.Username, err)
 		} else {
 			log.Printf("Saved player data for disconnecting player %s (Level: %d, EXP: %d)", disconnectedPlayerGameObj.Username, disconnectedPlayerGameObj.Level, disconnectedPlayerGameObj.CurrentEXP)

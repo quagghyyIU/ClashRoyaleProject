@@ -7,9 +7,10 @@ const (
 	LevelUpEXPMultiplier = 1.1 // 10% increase per level
 
 	// Enhanced TCR constants
-	InitialMana         = 5
-	ManaRegenRate       = 1   // Mana per time unit
+	InitialMana         = 15
+	ManaRegenRate       = 5
 	GameDurationSeconds = 180 // 3 minutes
+	MaxMana             = 20  // Maximum mana a player can hold
 
 	// Combat constants
 	CritDamageMultiplier   = 1.2 // 20% bonus damage on critical hit

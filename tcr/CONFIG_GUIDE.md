@@ -62,3 +62,14 @@ The `towers.json` file contains an array of tower specifications with the follow
 - **King Tower** (Type: "KING"): The main tower. If destroyed, the game ends.
 - **Guard Tower 1** (Type: "GUARD1"): Must be destroyed before attacking Guard Tower 2 or King Tower.
 - **Guard Tower 2** (Type: "GUARD2"): Can only be attacked after Guard Tower 1 is destroyed.
+
+## Core Gameplay Constants (Mana, etc.)
+
+While the files above define troop and tower base stats, several core gameplay constants, especially those related to the mana system, are defined directly in the server's source code. These are found in `tcr/internal/shared/constants.go`.
+
+Key constants include:
+- `InitialMana`: Players start with this much mana. (Default: 15)
+- `ManaRegenRate`: Mana regenerated at the start of each player's turn. (Default: 5)
+- `MaxMana`: The maximum mana a player can hold. (Default: 20)
+
+These values have been set to provide a more fluid gameplay experience.
